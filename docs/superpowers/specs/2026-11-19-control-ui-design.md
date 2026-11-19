@@ -66,7 +66,7 @@ kasad already knows every Kasa plug and switch on the LAN and polls them. Hugh w
 ### Testing and safety
 
 - Unit tests with the existing fake legacy server and fake KLAP device: write calls, error codes, unknown host, desired-state idempotence, SSE patch only on change, CSRF rejection, render tests for card states (on, off, offline, pending, error, unmetered).
-- **No write reaches a real device unless Hugh agrees to that specific device in this conversation.** First real check: Hugh chose **Deck LEDs** (the plug at the deck); we toggle it off and back on and confirm it from the device's own readback.
+- **No write reaches a real device unless Hugh agrees to that specific device in this conversation.** First real check: Hugh chose **the designated test plug** (the plug at the deck); we toggle it off and back on and confirm it from the device's own readback.
 - Public repo: no device names, IPs or screenshots; fixtures are invented.
 
 ## Left to the builder

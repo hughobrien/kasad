@@ -16,7 +16,7 @@
 - `go` directive stays `1.27.3`. After any go.mod change, recompute `vendorHash` (set `pkgs.lib.fakeHash`, build on bigthink, paste the `got:` hash).
 - Public repo: no real device names, IPs, MACs or screenshots in code, tests or docs. Fixtures are invented (`Lamp`, `10.0.0.1`).
 - Commits have no Claude trailer.
-- **No write reaches a real device** except Deck LEDs, in Task 5, after Hugh says go. Everything before that uses the fakes in `internal/kasa/kasa_test.go` or stubs.
+- **No write reaches a real device** except the designated test plug, in Task 5, after Hugh says go. Everything before that uses the fakes in `internal/kasa/kasa_test.go` or stubs.
 - `/metrics` and `/healthz` behaviour is unchanged.
 - The gate (`checks.gate`) must pass: vet, gofmt (ignoring `vendor/`), tests, race tests, and the templ drift check.
 
@@ -94,5 +94,5 @@
 
 - [ ] **Step 1: Ask Hugh for the cert pair** `kasad.crt` and `kasad.key` (the `fw` CA is not on bigthink; he supplies a tar as before, e.g. `/tmp/kasad.tar`), review it with him, and install into `/etc/nginx` (owner nginx:root, mode 644 and 600). Stop and wait until he provides it.
 - [ ] **Step 2: Config.** Add `services.nginx.virtualHosts."kasad.wg" = net-lib.mkHostProxyPass "kasad" net.lo.ipv4;` to `services/kasad.nix`; `nix flake update kasad`; diff `~/.config/nixos` against `/etc/nixos`, `sudo cp`, `chown -R root:root /etc/nixos`, `doas nixos-rebuild switch`. Verify: `https://kasad.wg/` loads, every card shows state, power, today and month kWh, and RSSI, `/metrics` still scrapes (Prometheus targets up), no failed units.
-- [ ] **Step 3: Real write test, Deck LEDs only, after Hugh says go.** Note its current state, switch it off from the page, confirm the card flips from the device's own readback and `kasa_relay_on` changes in Prometheus, switch it back on, confirm again. Report each result. Touch no other device.
+- [ ] **Step 3: Real write test, the designated test plug only, after Hugh says go.** Note its current state, switch it off from the page, confirm the card flips from the device's own readback and `kasa_relay_on` changes in Prometheus, switch it back on, confirm again. Report each result. Touch no other device.
 - [ ] **Step 4: Cleanup.** Commit and push the nixos repo; kasad repo on `main` and clean; remove temp files (including the cert tar on bigthink and any scripts). Update the `bigthink-monitoring-stack` memory with the UI and `kasad.wg`.
