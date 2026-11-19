@@ -4,9 +4,12 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -17,6 +20,8 @@ import (
 
 	"github.com/hughobrien/kasad/internal/exporter"
 	"github.com/hughobrien/kasad/internal/kasa"
+	"github.com/hughobrien/kasad/internal/web"
+	"github.com/hughobrien/kasad/internal/web/templates"
 )
 
 var version = "dev"
@@ -80,7 +85,8 @@ func run() error {
 	defer stop()
 	go e.Run(ctx)
 
-	srv := &http.Server{Addr: *listen, Handler: e.Handler(version), ReadHeaderTimeout: 5 * time.Second}
+	templates.BuildID = buildID()
+	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version)), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -104,4 +110,19 @@ func readCreds(path string) (*kasa.Credentials, error) {
 		return nil, fmt.Errorf("%s: want the email on line 1 and the password on line 2", path)
 	}
 	return &kasa.Credentials{Username: strings.TrimSpace(lines[0]), Password: strings.TrimRight(lines[1], "\r")}, nil
+}
+
+// buildID hashes the running binary, which changes on every deploy, so an open
+// browser tab notices a new daemon and reloads.
+func buildID() string {
+	if exe, err := os.Executable(); err == nil {
+		if f, err := os.Open(exe); err == nil {
+			defer f.Close()
+			h := sha256.New()
+			if _, err := io.Copy(h, f); err == nil {
+				return hex.EncodeToString(h.Sum(nil))[:12]
+			}
+		}
+	}
+	return "dev"
 }

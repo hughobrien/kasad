@@ -28,11 +28,7 @@ templ Page(p ui.PageView) {
 				<h1>kasad</h1>
 				@Summary(p)
 			</header>
-			<main id="devices">
-				for _, c := range p.Cards {
-					@Card(c)
-				}
-			</main>
+			@Devices(p.Cards)
 		</body>
 	</html>
 }
@@ -43,4 +39,14 @@ templ Summary(p ui.PageView) {
 		<b>{ p.TotalPower }</b>
 		<span>{ strconv.Itoa(p.UpCount) } of { strconv.Itoa(p.Total) } up</span>
 	</p>
+}
+
+// Devices is the card grid. It is always rendered whole (never empty), so
+// the event stream can replace it when devices come and go.
+templ Devices(cs []ui.CardView) {
+	<main id="devices">
+		for _, c := range cs {
+			@Card(c)
+		}
+	</main>
 }

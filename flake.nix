@@ -9,8 +9,27 @@
     systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
     forEachSystem = f: nixpkgs.lib.genAttrs systems f;
 
+    # nixpkgs lags templ; keep this in step with the templ version in go.mod
+    # (the *_templ.go files and the drift check use it). Drop when nixpkgs catches up.
+    templOverlay = final: prev: {
+      templ =
+        if prev.lib.versionAtLeast prev.templ.version "0.3.1118" then
+          throw "nixpkgs now ships templ ${prev.templ.version}: delete templOverlay from flake.nix"
+        else
+          prev.templ.overrideAttrs (old: rec {
+            version = "0.3.1118";
+            src = prev.fetchFromGitHub {
+              owner = "a-h";
+              repo = "templ";
+              rev = "v${version}";
+              hash = "sha256-4ARBfwLD37FSCC3pgYWomsXRThl8NkHLte8awD0/Ddo=";
+            };
+            vendorHash = "sha256-SI3Y7eqw+sLvBmRi7r4Oc30ovIKvFRGxdXF8fyKog9g=";
+          });
+    };
+
     perSystem = forEachSystem (system: let
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs { inherit system; overlays = [ templOverlay ]; };
       version = "0.1.0";
 
       kasad-pkg = pkgs.buildGoModule {
@@ -19,7 +38,7 @@
         src = ./.;
         # When go.mod/go.sum change, set this to pkgs.lib.fakeHash, build, and
         # paste the `got:` hash.
-        vendorHash = "sha256-MP1q99k5Vpi89ZYgDxcxzeL6KvOyNsIdwA7GEHgsGYA=";
+        vendorHash = pkgs.lib.fakeHash;
         subPackages = [ "cmd/kasad" ];
         ldflags = [ "-s" "-w" "-X main.version=${version}" ];
         doCheck = true;
@@ -42,12 +61,12 @@
       };
 
       devShells.default = pkgs.mkShell {
-        packages = with pkgs; [ go gopls gotools just ];
+        packages = with pkgs; [ go gopls gotools just templ ];
       };
 
       checks.gate = kasad-pkg.overrideAttrs (old: {
         pname = "kasad-ci-gate";
-        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.clang ];
+        nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.clang pkgs.templ ];
         doCheck = true;
         checkPhase = ''
           runHook preCheck
@@ -57,6 +76,9 @@
           [ -z "$drift" ] || { echo "gofmt drift: $drift"; exit 1; }
           go test ./...
           CGO_ENABLED=1 CC=clang go test -race ./...
+          cp -a internal/web/templates "$TMPDIR/templ-before"
+          templ generate
+          diff -rq "$TMPDIR/templ-before" internal/web/templates || { echo "templ drift; run 'just generate'"; exit 1; }
           runHook postCheck
         '';
       });
