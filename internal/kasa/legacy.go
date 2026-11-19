@@ -75,15 +75,50 @@ func legacyQuery(ctx context.Context, host string, req []byte) ([]byte, error) {
 	return xorDecrypt(body), nil
 }
 
-const legacyPollRequest = `{"system":{"get_sysinfo":{}},"emeter":{"get_realtime":{}}}`
+// legacyPollRequest asks for the sysinfo, the live reading and the device's
+// own day and month energy records, all in one round trip.
+func legacyPollRequest(now time.Time) []byte {
+	return []byte(fmt.Sprintf(`{"system":{"get_sysinfo":{}},"emeter":{"get_realtime":{},"get_daystat":{"month":%d,"year":%d},"get_monthstat":{"year":%d}}}`,
+		int(now.Month()), now.Year(), now.Year()))
+}
 
-// PollLegacy reads one device over the legacy protocol.
-func PollLegacy(ctx context.Context, host string) (*Reading, error) {
-	raw, err := legacyQuery(ctx, host, []byte(legacyPollRequest))
+// PollLegacy reads one device over the legacy protocol. now picks which
+// day and month of the device's energy records to report.
+func PollLegacy(ctx context.Context, host string, now time.Time) (*Reading, error) {
+	raw, err := legacyQuery(ctx, host, legacyPollRequest(now))
 	if err != nil {
 		return nil, err
 	}
-	return parseLegacy(raw)
+	return parseLegacy(raw, now)
+}
+
+// SetLegacyRelay switches the relay to the given state (it does not toggle).
+func SetLegacyRelay(ctx context.Context, host string, on bool) error {
+	state := 0
+	if on {
+		state = 1
+	}
+	raw, err := legacyQuery(ctx, host, []byte(fmt.Sprintf(`{"system":{"set_relay_state":{"state":%d}}}`, state)))
+	if err != nil {
+		return err
+	}
+	var r struct {
+		System struct {
+			Set *struct {
+				ErrCode int `json:"err_code"`
+			} `json:"set_relay_state"`
+		} `json:"system"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return fmt.Errorf("set_relay_state reply: %w", err)
+	}
+	if r.System.Set == nil {
+		return errors.New("set_relay_state: no result in reply")
+	}
+	if r.System.Set.ErrCode != 0 {
+		return fmt.Errorf("set_relay_state: device error_code %d", r.System.Set.ErrCode)
+	}
+	return nil
 }
 
 // legacyNum is a JSON number that tells "absent" from zero.
@@ -111,13 +146,38 @@ type legacyRealtime struct {
 	Total   legacyNum `json:"total"`
 }
 
-func parseLegacy(raw []byte) (*Reading, error) {
+// legacyStat is one entry of the device's per-day or per-month record.
+type legacyStat struct {
+	Year     int      `json:"year"`
+	Month    int      `json:"month"`
+	Day      int      `json:"day"`
+	EnergyWh *float64 `json:"energy_wh"`
+	Energy   *float64 `json:"energy"` // older firmware: kWh
+}
+
+func (s legacyStat) wh() float64 {
+	if s.EnergyWh != nil {
+		return *s.EnergyWh
+	}
+	if s.Energy != nil {
+		return *s.Energy * 1000
+	}
+	return 0
+}
+
+func parseLegacy(raw []byte, now time.Time) (*Reading, error) {
 	var r struct {
 		System struct {
 			Sysinfo *legacySysinfo `json:"get_sysinfo"`
 		} `json:"system"`
 		Emeter struct {
 			Realtime *legacyRealtime `json:"get_realtime"`
+			Daystat  *struct {
+				List []legacyStat `json:"day_list"`
+			} `json:"get_daystat"`
+			Monthstat *struct {
+				List []legacyStat `json:"month_list"`
+			} `json:"get_monthstat"`
 		} `json:"emeter"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
@@ -143,6 +203,26 @@ func parseLegacy(raw []byte) (*Reading, error) {
 		out.VoltageVolts = pick(scale(rt.VoltageMV, 1e-3), rt.Voltage)
 		out.CurrentAmps = pick(scale(rt.CurrentMA, 1e-3), rt.Current)
 		out.EnergyWh = pick(rt.TotalWh, scale(rt.Total, 1000))
+	}
+	// A device that answered the stats but has no entry for today (or this
+	// month) has recorded nothing yet, which is 0, not "unknown".
+	if ds := r.Emeter.Daystat; ds != nil {
+		v := 0.0
+		for _, e := range ds.List {
+			if e.Year == now.Year() && e.Month == int(now.Month()) && e.Day == now.Day() {
+				v = e.wh()
+			}
+		}
+		out.EnergyTodayWh = &v
+	}
+	if ms := r.Emeter.Monthstat; ms != nil {
+		v := 0.0
+		for _, e := range ms.List {
+			if e.Year == now.Year() && e.Month == int(now.Month()) {
+				v = e.wh()
+			}
+		}
+		out.EnergyMonthWh = &v
 	}
 	return out, nil
 }

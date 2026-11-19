@@ -205,12 +205,12 @@ func (e *Exporter) pollKind(ctx context.Context, host string, k kind, kl *kasa.K
 	}
 	switch k {
 	case kindLegacy:
-		r, err := kasa.PollLegacy(ctx, host)
+		r, err := kasa.PollLegacy(ctx, host, e.now())
 		return r, kindLegacy, kl, err
 	case kindKLAP:
 		return tryKLAP()
 	}
-	if r, err := kasa.PollLegacy(ctx, host); err == nil {
+	if r, err := kasa.PollLegacy(ctx, host, e.now()); err == nil {
 		return r, kindLegacy, kl, nil
 	}
 	return tryKLAP()

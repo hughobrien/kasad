@@ -9,11 +9,15 @@ import (
 )
 
 // smartCall sends one SMART-protocol method over KLAP and returns "result".
-func (k *KLAP) smartCall(ctx context.Context, method string) (json.RawMessage, error) {
-	req, _ := json.Marshal(map[string]any{
+func (k *KLAP) smartCall(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	body := map[string]any{
 		"method":             method,
 		"request_time_milis": time.Now().UnixMilli(),
-	})
+	}
+	if params != nil {
+		body["params"] = params
+	}
+	req, _ := json.Marshal(body)
 	raw, err := k.Request(ctx, req)
 	if err != nil {
 		return nil, err
@@ -43,7 +47,7 @@ func (e *SmartError) Error() string {
 
 // Poll reads one SMART-protocol device (for example the EP25).
 func (k *KLAP) Poll(ctx context.Context) (*Reading, error) {
-	raw, err := k.smartCall(ctx, "get_device_info")
+	raw, err := k.smartCall(ctx, "get_device_info", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -72,17 +76,20 @@ func (k *KLAP) Poll(ctx context.Context) (*Reading, error) {
 
 	// Energy methods are optional: a plug without a meter returns an error
 	// code, which is not a failed poll.
-	if raw, err := k.smartCall(ctx, "get_energy_usage"); err == nil {
+	if raw, err := k.smartCall(ctx, "get_energy_usage", nil); err == nil {
 		var eu struct {
 			CurrentPower *float64 `json:"current_power"` // mW
+			TodayEnergy  *float64 `json:"today_energy"`  // Wh
+			MonthEnergy  *float64 `json:"month_energy"`  // Wh
 		}
 		if json.Unmarshal(raw, &eu) == nil {
 			out.PowerWatts = scale(eu.CurrentPower, 1e-3)
+			out.EnergyTodayWh, out.EnergyMonthWh = eu.TodayEnergy, eu.MonthEnergy
 		}
 	} else if _, ok := err.(*SmartError); !ok {
 		return nil, err
 	}
-	if raw, err := k.smartCall(ctx, "get_emeter_data"); err == nil {
+	if raw, err := k.smartCall(ctx, "get_emeter_data", nil); err == nil {
 		var em struct {
 			PowerMW   *float64 `json:"power_mw"`
 			VoltageMV *float64 `json:"voltage_mv"`
@@ -99,4 +106,10 @@ func (k *KLAP) Poll(ctx context.Context) (*Reading, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// SetDeviceOn switches the device on or off (it does not toggle).
+func (k *KLAP) SetDeviceOn(ctx context.Context, on bool) error {
+	_, err := k.smartCall(ctx, "set_device_info", map[string]any{"device_on": on})
+	return err
 }

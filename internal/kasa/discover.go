@@ -79,6 +79,6 @@ func Discover(ctx context.Context, targets []string, wait time.Duration) (Found,
 }
 
 func parseLegacyDiscovery(b []byte) bool {
-	r, err := parseLegacy(xorDecrypt(b))
+	r, err := parseLegacy(xorDecrypt(b), time.Now())
 	return err == nil && r.Model != ""
 }

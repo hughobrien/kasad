@@ -17,4 +17,9 @@ type Reading struct {
 	VoltageVolts *float64
 	CurrentAmps  *float64
 	EnergyWh     *float64 // cumulative since the device's counter started
+
+	// Recorded by the device itself, per its own calendar. Nil if it does not
+	// report them.
+	EnergyTodayWh *float64
+	EnergyMonthWh *float64
 }

@@ -8,12 +8,14 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -29,6 +31,8 @@ func TestXORRoundTrip(t *testing.T) {
 	}
 }
 
+var testNow = time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+
 const kp125Reply = `{"system":{"get_sysinfo":{"alias":"Lamp","model":"KP125(US)","relay_state":1,"rssi":-60,"on_time":120}},
 "emeter":{"get_realtime":{"current_ma":154,"voltage_mv":122598,"power_mw":5535,"total_wh":441,"err_code":0}}}`
 
@@ -36,7 +40,7 @@ const ks200Reply = `{"system":{"get_sysinfo":{"alias":"Switch","model":"KS200(US
 "emeter":{"err_code":-1,"err_msg":"module not support"}}`
 
 func TestParseLegacy(t *testing.T) {
-	r, err := parseLegacy([]byte(kp125Reply))
+	r, err := parseLegacy([]byte(kp125Reply), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +51,7 @@ func TestParseLegacy(t *testing.T) {
 		t.Fatalf("emeter = %v %v %v %v", *r.PowerWatts, *r.VoltageVolts, *r.CurrentAmps, *r.EnergyWh)
 	}
 
-	r, err = parseLegacy([]byte(ks200Reply))
+	r, err = parseLegacy([]byte(ks200Reply), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,14 +59,14 @@ func TestParseLegacy(t *testing.T) {
 		t.Fatalf("switch must have state but no meter: %+v", r)
 	}
 
-	if _, err := parseLegacy([]byte(`{"system":{}}`)); err == nil {
+	if _, err := parseLegacy([]byte(`{"system":{}}`), testNow); err == nil {
 		t.Fatal("reply without sysinfo must be an error")
 	}
 }
 
 func TestParseLegacyOldFirmwareUnits(t *testing.T) {
 	r, err := parseLegacy([]byte(`{"system":{"get_sysinfo":{"model":"HS110","relay_state":1}},
-"emeter":{"get_realtime":{"current":0.5,"voltage":120.1,"power":60.2,"total":1.5}}}`))
+"emeter":{"get_realtime":{"current":0.5,"voltage":120.1,"power":60.2,"total":1.5}}}`), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +76,7 @@ func TestParseLegacyOldFirmwareUnits(t *testing.T) {
 }
 
 // fakeLegacy serves one reply on a TCP listener using the real framing.
-func fakeLegacy(t *testing.T, reply string) string {
+func fakeLegacy(t *testing.T, handler func(req string) string) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -95,7 +99,8 @@ func fakeLegacy(t *testing.T, reply string) string {
 				if _, err := io.ReadFull(c, body); err != nil {
 					return
 				}
-				if string(xorDecrypt(body)) != legacyPollRequest {
+				reply := handler(string(xorDecrypt(body)))
+				if reply == "" {
 					return
 				}
 				enc := xorEncrypt([]byte(reply))
@@ -109,7 +114,12 @@ func fakeLegacy(t *testing.T, reply string) string {
 }
 
 func TestLegacyQueryFraming(t *testing.T) {
-	addr := fakeLegacy(t, kp125Reply)
+	addr := fakeLegacy(t, func(req string) string {
+		if req != string(legacyPollRequest(testNow)) {
+			return ""
+		}
+		return kp125Reply
+	})
 	host, port, _ := net.SplitHostPort(addr)
 	old := legacyPortForTest
 	legacyPortForTest = port
@@ -117,7 +127,7 @@ func TestLegacyQueryFraming(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	r, err := PollLegacy(ctx, host)
+	r, err := PollLegacy(ctx, host, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +137,28 @@ func TestLegacyQueryFraming(t *testing.T) {
 }
 
 // fakeKLAP is a device: KLAP v2 handshake plus SMART methods.
-func fakeKLAP(t *testing.T, creds Credentials, methods map[string]any) *httptest.Server {
+type requestLog struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (l *requestLog) add(b string) { l.mu.Lock(); l.bodies = append(l.bodies, b); l.mu.Unlock() }
+
+func (l *requestLog) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.bodies) == 0 {
+		return ""
+	}
+	return l.bodies[len(l.bodies)-1]
+}
+
+func fakeKLAP(t *testing.T, creds Credentials, methods map[string]any) (*httptest.Server, *requestLog) {
 	t.Helper()
 	v2, _ := creds.authHashes()
 	var local, remote []byte
 	var sess *klapSession
+	log := &requestLog{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		switch r.URL.Path {
@@ -161,6 +188,7 @@ func fakeKLAP(t *testing.T, creds Credentials, methods map[string]any) *httptest
 			pt := make([]byte, len(body)-32)
 			cipher.NewCBCDecrypter(blk, iv).CryptBlocks(pt, body[32:])
 			pt = pt[:len(pt)-int(pt[len(pt)-1])]
+			log.add(string(pt))
 			var req struct{ Method string }
 			_ = json.Unmarshal(pt, &req)
 			res, ok := methods[req.Method]
@@ -177,12 +205,12 @@ func fakeKLAP(t *testing.T, creds Credentials, methods map[string]any) *httptest
 		}
 	}))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, log
 }
 
 func TestKLAPPoll(t *testing.T) {
 	creds := Credentials{Username: "me@example.com", Password: "hunter2"}
-	srv := fakeKLAP(t, creds, map[string]any{
+	srv, _ := fakeKLAP(t, creds, map[string]any{
 		"get_device_info": map[string]any{
 			"model": "EP25", "device_on": true, "on_time": 99, "rssi": -55,
 			"nickname": base64.StdEncoding.EncodeToString([]byte("Fridge")),
@@ -207,7 +235,7 @@ func TestKLAPPoll(t *testing.T) {
 }
 
 func TestKLAPWrongPassword(t *testing.T) {
-	srv := fakeKLAP(t, Credentials{Username: "a", Password: "b"}, nil)
+	srv, _ := fakeKLAP(t, Credentials{Username: "a", Password: "b"}, nil)
 	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), Credentials{Username: "a", Password: "nope"})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -218,7 +246,7 @@ func TestKLAPWrongPassword(t *testing.T) {
 
 func TestKLAPOptionalEnergyMethods(t *testing.T) {
 	creds := Credentials{Username: "a", Password: "b"}
-	srv := fakeKLAP(t, creds, map[string]any{
+	srv, _ := fakeKLAP(t, creds, map[string]any{
 		"get_device_info": map[string]any{"model": "P100", "device_on": false},
 	})
 	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), creds)
@@ -230,5 +258,133 @@ func TestKLAPOptionalEnergyMethods(t *testing.T) {
 	}
 	if r.PowerWatts != nil || r.On {
 		t.Fatalf("unmetered plug: %+v", r)
+	}
+}
+
+func TestSetLegacyRelaySendsState(t *testing.T) {
+	for _, tc := range []struct {
+		on   bool
+		want string
+	}{
+		{true, `{"system":{"set_relay_state":{"state":1}}}`},
+		{false, `{"system":{"set_relay_state":{"state":0}}}`},
+	} {
+		var got string
+		addr := fakeLegacy(t, func(req string) string {
+			got = req
+			return `{"system":{"set_relay_state":{"err_code":0}}}`
+		})
+		host, port, _ := net.SplitHostPort(addr)
+		old := legacyPortForTest
+		legacyPortForTest = port
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err := SetLegacyRelay(ctx, host, tc.on)
+		cancel()
+		legacyPortForTest = old
+		if err != nil || got != tc.want {
+			t.Fatalf("on=%v: err=%v request=%q", tc.on, err, got)
+		}
+	}
+}
+
+func TestSetLegacyRelayDeviceError(t *testing.T) {
+	addr := fakeLegacy(t, func(string) string { return `{"system":{"set_relay_state":{"err_code":-1}}}` })
+	host, port, _ := net.SplitHostPort(addr)
+	old := legacyPortForTest
+	legacyPortForTest = port
+	defer func() { legacyPortForTest = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := SetLegacyRelay(ctx, host, true); err == nil {
+		t.Fatal("err_code -1 must be an error")
+	}
+}
+
+func TestKLAPSetDeviceOn(t *testing.T) {
+	creds := Credentials{Username: "a", Password: "b"}
+	srv, log := fakeKLAP(t, creds, map[string]any{"set_device_info": map[string]any{}})
+	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), creds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := k.SetDeviceOn(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	var req struct {
+		Method string
+		Params map[string]any
+	}
+	if err := json.Unmarshal([]byte(log.last()), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != "set_device_info" || req.Params["device_on"] != true {
+		t.Fatalf("request = %s", log.last())
+	}
+
+	// An unknown method makes the fake answer -1008: surfaced as *SmartError.
+	srv2, _ := fakeKLAP(t, creds, nil)
+	k2 := NewKLAP(strings.TrimPrefix(srv2.URL, "http://"), creds)
+	var se *SmartError
+	if err := k2.SetDeviceOn(ctx, false); !errors.As(err, &se) {
+		t.Fatalf("err = %v, want *SmartError", err)
+	}
+}
+
+func TestLegacyPollRequestAsksForStats(t *testing.T) {
+	var req struct {
+		Emeter map[string]map[string]int `json:"emeter"`
+	}
+	if err := json.Unmarshal(legacyPollRequest(testNow), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Emeter["get_daystat"]["year"] != 2026 || req.Emeter["get_daystat"]["month"] != 11 || req.Emeter["get_monthstat"]["year"] != 2026 {
+		t.Fatalf("request = %s", legacyPollRequest(testNow))
+	}
+	if _, ok := req.Emeter["get_realtime"]; !ok {
+		t.Fatal("realtime reading dropped")
+	}
+}
+
+const statsReply = `{"system":{"get_sysinfo":{"alias":"Lamp","model":"KP125(US)","relay_state":1}},
+"emeter":{"get_realtime":{"power_mw":5000},
+"get_daystat":{"day_list":[{"year":2026,"month":11,"day":18,"energy_wh":56},{"year":2026,"month":11,"day":19,"energy_wh":3}]},
+"get_monthstat":{"month_list":[{"year":2026,"month":10,"energy_wh":1410},{"year":2026,"month":11,"energy_wh":1185}]}}}`
+
+func TestParseLegacyDayMonth(t *testing.T) {
+	r, err := parseLegacy([]byte(statsReply), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.EnergyTodayWh == nil || *r.EnergyTodayWh != 3 || r.EnergyMonthWh == nil || *r.EnergyMonthWh != 1185 {
+		t.Fatalf("today=%v month=%v", r.EnergyTodayWh, r.EnergyMonthWh)
+	}
+
+	// No entry for today yet: the device has recorded nothing, which is 0.
+	r, _ = parseLegacy([]byte(statsReply), testNow.AddDate(0, 0, 1))
+	if r.EnergyTodayWh == nil || *r.EnergyTodayWh != 0 {
+		t.Fatalf("today without an entry = %v, want 0", r.EnergyTodayWh)
+	}
+
+	// A device that does not answer the stats has neither.
+	r, _ = parseLegacy([]byte(kp125Reply), testNow)
+	if r.EnergyTodayWh != nil || r.EnergyMonthWh != nil {
+		t.Fatalf("no stats in reply: %v %v", r.EnergyTodayWh, r.EnergyMonthWh)
+	}
+}
+
+func TestKLAPPollEnergy(t *testing.T) {
+	creds := Credentials{Username: "a", Password: "b"}
+	srv, _ := fakeKLAP(t, creds, map[string]any{
+		"get_device_info":  map[string]any{"model": "EP25"},
+		"get_energy_usage": map[string]any{"current_power": 3225, "today_energy": 56, "month_energy": 1185},
+	})
+	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), creds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r, err := k.Poll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.EnergyTodayWh == nil || *r.EnergyTodayWh != 56 || r.EnergyMonthWh == nil || *r.EnergyMonthWh != 1185 {
+		t.Fatalf("today=%v month=%v", r.EnergyTodayWh, r.EnergyMonthWh)
 	}
 }
