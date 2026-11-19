@@ -6,7 +6,7 @@ kasad already knows every Kasa plug and switch on the LAN and polls them. Hugh w
 
 ## Goals
 
-- One card per discovered device: name, model, on/off state, a clear offline state, and the readings Hugh asked for: **power** now (W), the device's **total energy** (kWh, as counted by the device), and **signal strength** (RSSI, dBm). Power and energy show only on metered plugs; the page header shows the **combined power** of all devices and `n of m up`.
+- One card per discovered device: name, model, on/off state, a clear offline state, and the readings Hugh asked for: **power** now (W), **historical energy** in kWh, today and this month, as recorded by the device itself, and **signal strength** (RSSI, dBm). Power and energy show only on metered plugs (the per-day and per-month counters come back in the same single request as the live reading, so polling costs no extra round trip); the page header shows the **combined power** of all devices and `n of m up`.
 - A switch on every card. Every device is switchable from the start; the `.wg` network and its few authorised clients are the access control (Hugh's decision).
 - Updates appear live without reloading, including changes made elsewhere (the phone app, a wall switch).
 - Same stack and look as comfortd and breezyd, so the three feel like one family.
@@ -35,6 +35,7 @@ kasad already knows every Kasa plug and switch on the LAN and polls them. Hugh w
 - `SetLegacyRelay(ctx, host, on)`: sends `{"system":{"set_relay_state":{"state":0|1}}}` over the existing legacy transport and checks `err_code == 0`.
 - `(*KLAP).SetDeviceOn(ctx, on)`: SMART `set_device_info` with `{"device_on": bool}`; a non-zero `error_code` is an error.
 - Both are idempotent: they set a state, they do not toggle.
+- Reads gain `EnergyTodayWh` and `EnergyMonthWh`: legacy devices answer `get_daystat` and `get_monthstat` in the same request (checked live: entries like `{year, month, day, energy_wh}`); SMART devices report `today_energy` and `month_energy` in `get_energy_usage`. The metrics are unchanged.
 
 ### Exporter: `internal/exporter`
 
