@@ -20,19 +20,19 @@ templ Card(c ui.CardView) {
 		</div>
 		if c.Dimmable && c.Up && c.Brightness > 0 {
 			<label class="dim">
-				Brightness
 				<input
-					type="number"
+					type="range"
 					min="1"
 					max="100"
 					step="1"
-					inputmode="numeric"
+					aria-label="Brightness"
 					id={ "bright-" + c.ID + "-" + strconv.Itoa(c.Brightness) }
 					value={ strconv.Itoa(c.Brightness) }
 					data-ignore-morph
+					data-on:input="el.nextElementSibling.textContent = el.value + '%'"
 					data-on:change={ "@post('/ui/devices/" + c.Host + "/brightness?pct=' + el.value)" }
 				/>
-				%
+				<output>{ strconv.Itoa(c.Brightness) }%</output>
 			</label>
 		}
 		if !c.Up {

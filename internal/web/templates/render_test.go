@@ -97,16 +97,16 @@ func TestPageRendersEmptyAndWithCards(t *testing.T) {
 	}
 }
 
-func TestCardDimmerHasEditablePercent(t *testing.T) {
+func TestCardDimmerIsASliderWithPercent(t *testing.T) {
 	c := onCard()
 	c.Dimmable, c.Brightness = true, 46
 	h := render(t, Card(c))
-	for _, want := range []string{`type="number"`, `min="1"`, `max="100"`, `value="46"`, "data-ignore-morph", "/ui/devices/10.0.0.1/brightness?pct=", "%"} {
+	for _, want := range []string{`type="range"`, `min="1"`, `max="100"`, `value="46"`, "data-ignore-morph", "/ui/devices/10.0.0.1/brightness?pct=", `>46%</output>`} {
 		if !strings.Contains(h, want) {
 			t.Errorf("missing %q in:\n%s", want, h)
 		}
 	}
-	if strings.Contains(render(t, Card(onCard())), `type="number"`) {
+	if strings.Contains(render(t, Card(onCard())), `type="range"`) {
 		t.Fatal("a plug must have no percent field")
 	}
 }
