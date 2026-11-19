@@ -97,6 +97,30 @@ connection-tracking firewall treats as unsolicited and drops. On such a host
 allow them in, for example with nftables `udp sport { 9999, 20002 } accept` on
 the LAN interface. The module's `openFirewall` only opens the page's TCP port.
 
+## Grafana dashboard
+
+`grafana/kasad.json` is the dashboard in the second screenshot. In Grafana:
+Dashboards, New, Import, upload the file, and pick your Prometheus data source
+when asked (it is an input, so nothing in the file is tied to one Grafana).
+
+- **Needs attention:** a green "All clear", or one line per problem device: not
+  answering, no good poll for two minutes, Wi-Fi weaker than -75 dBm, mains
+  outside 114-126 V, or more than ten failed polls in the last hour.
+- **Summary row:** combined draw, energy in the selected time range, relays on,
+  devices answering, mains voltage.
+- **Per device:** power stacked by plug with a mean/max/last table, energy per
+  plug, and on/off timelines for plugs and for wall switches (dimmers shaded by
+  brightness).
+- **Network & polling** (collapsed row): Wi-Fi signal per device, mains voltage
+  range, and failed polls.
+
+It assumes models starting `KS` are wall switches (no power meter) and treats
+every other model as a plug. "Drawing now" and "Power by plug" add up every
+metered plug, so a plug fed from another metered plug is counted twice there;
+the control page's header avoids that with its `downstream` setting, the
+dashboard does not. `go test` checks that every `kasa_` metric the dashboard
+queries still exists.
+
 ## Running
 
 ```

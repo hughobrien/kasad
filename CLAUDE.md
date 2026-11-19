@@ -14,6 +14,7 @@ Prometheus exporter and control page for TP-Link Kasa plugs and switches, runnin
 - `internal/kasa`: the wire protocols. `legacy.go` (XOR, TCP 9999), `klap.go` (KLAP v1/v2 handshake and AES session), `smart.go` (SMART-protocol methods over KLAP), `discover.go` (UDP 9999 and 20002).
 - `internal/exporter`: device table, background discovery and polling, `SetRelay`, the change hub (`Subscribe`), `Devices()` view, Prometheus collector.
 - `internal/web`: the page. `ui/` formats readings, `templates/` is templ (`just generate` after edits; commit the `*_templ.go`), `server.go` routes and the CSRF check, `sse.go` the live stream (sends only what changed), `vendor/` datastar.
+- `grafana/kasad.json`: importable dashboard (datasource is the `DS_PROMETHEUS` input). `internal/exporter/dashboard_test.go` fails if it uses a metric the exporter no longer exports. It is exported from a live Grafana; keep device names and UIDs out of it.
 - `cmd/kasad`: flags and wiring. `nix/module.nix`: the NixOS module.
 
 ## Things learned
