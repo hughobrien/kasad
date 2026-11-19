@@ -16,14 +16,15 @@ var deviceLabels = []string{"alias", "host", "model"}
 // metric describes one per-device family and how to read its sample.
 type metric struct {
 	name   string
+	help   string
 	desc   *prometheus.Desc
 	typ    prometheus.ValueType
 	value  func(snapshot) (float64, bool)
-	pushed bool // a measurement: pushed per reading when a store is set
+	pushed bool // a measurement: pushed with each reading
 }
 
 func newMetric(name, help string, typ prometheus.ValueType, value func(snapshot) (float64, bool)) metric {
-	return metric{name, prometheus.NewDesc(name, help, deviceLabels, nil), typ, value, false}
+	return metric{name, help, prometheus.NewDesc(name, help, deviceLabels, nil), typ, value, false}
 }
 
 // measured marks a metric as a measurement, pushed with each reading.
@@ -86,50 +87,48 @@ var metrics = []metric{
 	measured(newMetric("kasa_rssi_dbm", "Wi-Fi signal strength at the device.", gauge, reading(func(r *kasa.Reading) *float64 { return r.RSSI }))),
 }
 
-var (
-	devicesDesc    = prometheus.NewDesc("kasad_devices", "Devices currently tracked.", nil, nil)
-	pushErrorsDesc = prometheus.NewDesc("kasad_push_errors_total", "Failed writes to Prometheus since kasad started.", nil, nil)
-	queuedDesc     = prometheus.NewDesc("kasad_push_queued_readings", "Readings waiting to be pushed.", nil, nil)
-)
+var devicesDesc = prometheus.NewDesc("kasad_devices", "Devices currently tracked.", nil, nil)
 
 // collector turns the device table into samples at scrape time. Building the
 // samples fresh each time is what lets a down device's measurements vanish.
-type collector struct{ e *Exporter }
+// Measurements also pushed carry pushed_<target>="true" for each target, so
+// a target's own scrape can drop the copies it already has.
+type collector struct {
+	e     *Exporter
+	descs []*prometheus.Desc // per metric, with the pushed labels on measurements
+}
+
+func newCollector(e *Exporter) collector {
+	c := collector{e: e}
+	pushed := e.push.Targets().Labels()
+	for _, m := range metrics {
+		d := m.desc
+		if m.pushed && len(pushed) > 0 {
+			d = prometheus.NewDesc(m.name, m.help, deviceLabels, pushed)
+		}
+		c.descs = append(c.descs, d)
+	}
+	return c
+}
 
 func (c collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- devicesDesc
-	if c.e.store != nil {
-		ch <- pushErrorsDesc
-		ch <- queuedDesc
-	}
-	for _, m := range metrics {
-		if !m.pushed || c.e.store == nil {
-			ch <- m.desc
-		}
+	for _, d := range c.descs {
+		ch <- d
 	}
 }
 
 func (c collector) Collect(ch chan<- prometheus.Metric) {
 	snaps := c.e.snapshot()
 	ch <- prometheus.MustNewConstMetric(devicesDesc, prometheus.GaugeValue, float64(len(snaps)))
-	if c.e.store != nil {
-		c.e.mu.Lock()
-		errs, queued := c.e.pushErrors, len(c.e.queue)
-		c.e.mu.Unlock()
-		ch <- prometheus.MustNewConstMetric(pushErrorsDesc, prometheus.CounterValue, float64(errs))
-		ch <- prometheus.MustNewConstMetric(queuedDesc, prometheus.GaugeValue, float64(queued))
-	}
 	for _, s := range snaps {
 		alias, model := "", ""
 		if s.last != nil {
 			alias, model = s.last.Alias, s.last.Model
 		}
-		for _, m := range metrics {
-			if m.pushed && c.e.store != nil {
-				continue
-			}
+		for i, m := range metrics {
 			if v, ok := m.value(s); ok {
-				ch <- prometheus.MustNewConstMetric(m.desc, m.typ, v, alias, s.host, model)
+				ch <- prometheus.MustNewConstMetric(c.descs[i], m.typ, v, alias, s.host, model)
 			}
 		}
 	}
@@ -146,8 +145,9 @@ func (e *Exporter) Handler(version string) http.Handler {
 			Help:        "kasad version.",
 			ConstLabels: prometheus.Labels{"version": version},
 		}, func() float64 { return 1 }),
-		collector{e},
+		newCollector(e),
 	)
+	reg.MustRegister(e.push.Collectors("kasad")...)
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))

@@ -46,6 +46,8 @@ func list(s string) []string {
 }
 
 func run() error {
+	var targets promwrite.Targets
+	flag.Var(&targets, "push", "name=url of a remote write receiver (VictoriaMetrics, or Prometheus with its receiver on) to push every reading to; repeat for more. /metrics serves the readings either way, labelled pushed_<name>=\"true\" for the receiver's own scrape to drop")
 	var (
 		listen    = flag.String("listen", "127.0.0.1:9881", "HTTP listen address")
 		credsPath = flag.String("credentials", "", "file with the TP-Link account email (line 1) and password (line 2); optional, only newer devices need it")
@@ -53,7 +55,6 @@ func run() error {
 		hosts     = flag.String("hosts", "", "comma-separated devices to poll even if discovery misses them")
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
 		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")
-		promURL   = flag.String("prometheus-url", "", "Prometheus to push every reading to (remote write receiver enabled); empty serves readings on /metrics instead")
 		job       = flag.String("job", "kasad", "job label on pushed series")
 		expire    = flag.Duration("expire", 10*time.Minute, "drop a discovered device after this long unseen")
 		pollTO    = flag.Duration("poll-timeout", 5*time.Second, "timeout for one poll attempt")
@@ -85,11 +86,7 @@ func run() error {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	var store exporter.Store
-	if *promURL != "" {
-		store = &promwrite.Client{Base: *promURL}
-	}
-	e := exporter.New(cfg, store, log)
+	e := exporter.New(cfg, promwrite.NewPushers(targets, nil), log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

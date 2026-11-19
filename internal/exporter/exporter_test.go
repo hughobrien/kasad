@@ -107,12 +107,16 @@ func samplesOf(ws [][]promwrite.Series, name string) []promwrite.Sample {
 	return out
 }
 
-// pushTest has one legacy plug that reads 10 W more on every poll.
+// pushTest has one legacy plug that reads 10 W more on every poll, pushed
+// to one target, vm.
 func pushTest() (*Exporter, *fakeStore, *time.Time) {
 	store := &fakeStore{}
-	e := New(Config{Expire: 10 * time.Minute, PollTimeout: time.Second}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	push := promwrite.NewPushers(promwrite.Targets{{Name: "vm", URL: "http://vm"}}, nil)
+	push[0].Queue.W = store
+	e := New(Config{Expire: 10 * time.Minute, PollTimeout: time.Second}, push, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	now := time.Unix(1700000000, 0)
 	e.now = func() time.Time { return now }
+	push[0].Queue.Now = e.now
 	w := 0.0
 	e.be.pollLegacy = func(context.Context, string, time.Time) (*kasa.Reading, error) {
 		w += 10
@@ -133,17 +137,36 @@ func TestPushesEveryReading(t *testing.T) {
 		t.Fatalf("want three readings at their poll times, got %v", p)
 	}
 	s := store.writes[0][0]
-	if s.Labels["job"] != "kasad" || s.Labels["alias"] != "Lamp" || s.Labels["host"] != "10.0.0.1" || s.Labels["model"] != "KP115(US)" {
+	if s.Labels["job"] != "kasad" || s.Labels["alias"] != "Lamp" || s.Labels["host"] != "10.0.0.1" || s.Labels["model"] != "KP115(US)" || s.Labels["pushed_vm"] != "" {
 		t.Errorf("labels %v", s.Labels)
 	}
+	// /metrics keeps every reading for any scraper, the pushed ones marked
+	// so vm's own scrape can drop them; health is not marked.
 	out := scrape(t, e)
-	if strings.Contains(out, "kasa_power_watts") || strings.Contains(out, "kasa_relay_on") {
-		t.Errorf("measurements are pushed, not scraped:\n%s", out)
-	}
-	for _, want := range []string{`kasa_up{alias="Lamp",host="10.0.0.1",model="KP115(US)"} 1`, "kasad_push_errors_total 0", "kasad_push_queued_readings 0"} {
+	for _, want := range []string{
+		`kasa_power_watts{alias="Lamp",host="10.0.0.1",model="KP115(US)",pushed_vm="true"} 30`,
+		`kasa_relay_on{alias="Lamp",host="10.0.0.1",model="KP115(US)",pushed_vm="true"} 1`,
+		`kasa_up{alias="Lamp",host="10.0.0.1",model="KP115(US)"} 1`,
+		`kasad_push_errors_total{target="vm"} 0`,
+		`kasad_push_queued_samples{target="vm"} 0`,
+	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+func TestNoTargetsServesReadingsUnmarked(t *testing.T) {
+	e, _, _ := pushTest()
+	e = New(Config{Expire: 10 * time.Minute, PollTimeout: time.Second}, nil, e.log)
+	e.be.pollLegacy = func(context.Context, string, time.Time) (*kasa.Reading, error) {
+		return &kasa.Reading{Alias: "Lamp", Model: "KP115(US)", PowerWatts: f(5)}, nil
+	}
+	e.devices["10.0.0.1"] = &device{host: "10.0.0.1", kind: kindLegacy}
+	e.pollAll(t.Context())
+	out := scrape(t, e)
+	if !strings.Contains(out, `kasa_power_watts{alias="Lamp",host="10.0.0.1",model="KP115(US)"} 5`) || strings.Contains(out, "pushed_") {
+		t.Errorf("want unmarked readings:\n%s", out)
 	}
 }
 
@@ -153,8 +176,8 @@ func TestPushFailures(t *testing.T) {
 	e.pollAll(t.Context())
 	*now = now.Add(15 * time.Second)
 	e.pollAll(t.Context())
-	if len(e.queue) != 2 {
-		t.Fatalf("a failed push should keep the readings: %d queued", len(e.queue))
+	if n := e.push[0].Queue.Len(); n != 4 { // power and relay, twice
+		t.Fatalf("a failed push should keep the readings: %d samples queued", n)
 	}
 	store.err = nil
 	*now = now.Add(15 * time.Second)
@@ -162,23 +185,10 @@ func TestPushFailures(t *testing.T) {
 	if p := samplesOf(store.writes, "kasa_power_watts"); len(p) != 3 || p[0].V != 10 || p[2].V != 30 {
 		t.Fatalf("want the kept readings sent in order with the new one: %v", p)
 	}
-
-	store.err = &promwrite.RefusedError{Status: 400, Body: "out of order sample"}
-	e.pollAll(t.Context())
-	if len(e.queue) != 0 {
-		t.Error("a refused push should be dropped")
-	}
-
-	store.err = errors.New("down")
-	e.pollAll(t.Context())
-	*now = now.Add(time.Hour)
-	store.err = nil
-	n := len(samplesOf(store.writes, "kasa_power_watts"))
-	e.pollAll(t.Context())
-	if got := len(samplesOf(store.writes, "kasa_power_watts")) - n; got != 1 {
-		t.Errorf("an hour-old reading should be dropped, not sent: %d sent", got)
-	}
-	if !strings.Contains(scrape(t, e), "kasad_push_errors_total 4") {
+	if !strings.Contains(scrape(t, e), `kasad_push_errors_total{target="vm"} 2`) {
 		t.Error("push errors not counted")
+	}
+	if e.push[0].Queue.MaxAge != queueAge {
+		t.Error("the backlog should be bounded")
 	}
 }

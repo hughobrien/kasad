@@ -1,6 +1,7 @@
 // Package exporter keeps the set of known devices, polls them in the
-// background, pushes every reading to Prometheus with remote write (at the
-// time it was taken) and serves health on /metrics.
+// background, pushes every reading with remote write (at the time it was
+// taken) to each target, and serves the latest readings and health on
+// /metrics, the pushed ones labelled pushed_<target>="true".
 package exporter
 
 import (
@@ -35,17 +36,6 @@ type Config struct {
 	PollTimeout      time.Duration
 	DiscoverWait     time.Duration
 	Job              string // job label on pushed series
-}
-
-// Store takes pushed samples (a *promwrite.Client).
-type Store interface {
-	Write(ctx context.Context, series []promwrite.Series) error
-}
-
-// queued is one successful poll waiting to be pushed.
-type queued struct {
-	at   time.Time
-	snap snapshot
 }
 
 type device struct {
@@ -91,23 +81,27 @@ type Exporter struct {
 	// subs are woken (coalesced, never blocking) whenever a device changes.
 	subs map[chan struct{}]struct{}
 
-	// store, when set, gets every reading; the measurements then leave
-	// /metrics. Nil serves them at scrape time instead.
-	store Store
+	// push gets every reading, one queue per target.
+	push promwrite.Pushers
 
-	mu         sync.Mutex
-	devices    map[string]*device
-	queue      []queued
-	pushErrors uint64
+	mu      sync.Mutex
+	devices map[string]*device
 }
 
-// New returns an Exporter; call Run to start it. A non-nil store gets every
-// reading pushed.
-func New(cfg Config, store Store, log *slog.Logger) *Exporter {
+// queueAge bounds each target's backlog while it is away: about 1,000
+// samples a poll is 240,000 an hour.
+const queueAge = 2 * time.Hour
+
+// New returns an Exporter; call Run to start it. Every reading is pushed to
+// each of push (none is fine: /metrics has them all).
+func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
 	if cfg.Job == "" {
 		cfg.Job = "kasad"
 	}
-	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(), store: store,
+	for _, p := range push {
+		p.Queue.MaxAge = queueAge
+	}
+	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(), push: push,
 		subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
 	for _, h := range cfg.Hosts {
 		e.devices[h] = &device{host: h, static: true}
@@ -198,71 +192,33 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
-	e.push(ctx)
+	e.flush(ctx)
 }
 
-// maxAge is how old a queued reading may get while Prometheus is away:
-// Prometheus refuses samples older than about an hour.
-const maxAge = 50 * time.Minute
-
-// push sends every queued reading in one write. On a failure Prometheus may
-// recover from, the queue is kept for the next round; a write it refused is
-// dropped, since sending it again would fail the same way.
-func (e *Exporter) push(ctx context.Context) {
-	if e.store == nil {
-		return
+// flush sends what each target has queued; one that fails keeps its queue
+// for the next round.
+func (e *Exporter) flush(ctx context.Context) {
+	if err := e.push.Flush(ctx); err != nil {
+		e.log.Warn("push failed", "err", err)
 	}
-	e.mu.Lock()
-	q := e.queue
-	e.queue = nil
-	e.mu.Unlock()
-	cutoff := e.now().Add(-maxAge)
-	for len(q) > 0 && q[0].at.Before(cutoff) {
-		q = q[1:]
-	}
-	if len(q) == 0 {
-		return
-	}
-	err := e.store.Write(ctx, e.series(q))
-	if err == nil {
-		return
-	}
-	var refused *promwrite.RefusedError
-	e.mu.Lock()
-	e.pushErrors++
-	if !errors.As(err, &refused) {
-		e.queue = append(q, e.queue...) // readings taken meanwhile go after
-	}
-	e.mu.Unlock()
-	e.log.Warn("push failed", "err", err, "kept", !errors.As(err, &refused), "readings", len(q))
 }
 
-// series turns queued readings into one series per metric and device, oldest
-// sample first.
-func (e *Exporter) series(q []queued) []promwrite.Series {
-	idx := map[string]int{}
+// series turns one reading into a series per measured metric, one sample at
+// the poll's time.
+func (e *Exporter) series(at time.Time, s snapshot) []promwrite.Series {
+	alias, model := "", ""
+	if s.last != nil {
+		alias, model = s.last.Alias, s.last.Model
+	}
 	var out []promwrite.Series
-	for _, r := range q {
-		alias, model := "", ""
-		if r.snap.last != nil {
-			alias, model = r.snap.last.Alias, r.snap.last.Model
+	for _, m := range metrics {
+		if !m.pushed {
+			continue
 		}
-		for _, m := range metrics {
-			if !m.pushed {
-				continue
-			}
-			v, ok := m.value(r.snap)
-			if !ok {
-				continue
-			}
-			k := m.name + "\x00" + r.snap.host
-			i, seen := idx[k]
-			if !seen {
-				i, idx[k] = len(out), len(out)
-				out = append(out, promwrite.Series{Labels: map[string]string{"__name__": m.name, "job": e.cfg.Job,
-					"alias": alias, "host": r.snap.host, "model": model}})
-			}
-			out[i].Samples = append(out[i].Samples, promwrite.Sample{T: r.at, V: v})
+		if v, ok := m.value(s); ok {
+			out = append(out, promwrite.Series{
+				Labels:  map[string]string{"__name__": m.name, "job": e.cfg.Job, "alias": alias, "host": s.host, "model": model},
+				Samples: []promwrite.Sample{{T: at, V: v}}})
 		}
 	}
 	return out
@@ -309,9 +265,7 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 	d.ok, d.last, d.lastOK, d.lastSeen = true, r, now, now
 	d.kind, d.klap = used, kl
 	d.writeErr = ""
-	if e.store != nil {
-		e.queue = append(e.queue, queued{now, snapshot{host: d.host, kind: d.kind, ok: true, lastOK: now, last: r}})
-	}
+	e.push.Add(e.series(now, snapshot{host: d.host, kind: d.kind, ok: true, lastOK: now, last: r})...)
 	e.notify()
 }
 

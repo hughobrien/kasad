@@ -38,17 +38,30 @@ kasa_on_time_seconds  kasa_brightness_percent  kasa_rssi_dbm
 kasad_devices  kasad_build_info
 ```
 
-With `--prometheus-url`, every successful poll (every 15 seconds, and right
-after a switch from the page) is pushed with remote write at the time it was
-taken: power, voltage, current, energy, relay, on-time, brightness and RSSI.
-None are lost to a scrape interval that differs from the poll's, and none are
-read twice. `/metrics` keeps the health: `kasa_up`,
-`kasa_last_success_timestamp_seconds`, `kasa_poll_errors_total`,
-`kasad_devices`, plus `kasad_push_errors_total` and
-`kasad_push_queued_readings`. If Prometheus is away, readings queue and go
-with the next push; ones older than 50 minutes are dropped, as Prometheus
-would refuse them. Without `--prometheus-url` the measurements are served on
-`/metrics` instead.
+`/metrics` serves the latest reading of every device: power, voltage,
+current, energy, relay, on-time, brightness and RSSI, with the health:
+`kasa_up`, `kasa_last_success_timestamp_seconds`, `kasa_poll_errors_total`
+and `kasad_devices`.
+
+With `--push name=url` (repeatable), every successful poll (every 15
+seconds, and right after a switch from the page) is also pushed with remote
+write, at the time it was taken, to each target: VictoriaMetrics, or
+Prometheus with its receiver on. None are lost to a scrape interval that
+differs from the poll's, and none are read twice. On `/metrics` the pushed
+readings then carry `pushed_<name>="true"`, so the target's own scrape of
+kasad can drop the copies it already has:
+
+```yaml
+metric_relabel_configs:
+  - source_labels: [pushed_mytarget]
+    regex: "true"
+    action: drop
+```
+
+Any other scraper keeps them. Each target has its own queue
+(`kasad_push_queued_samples{target}`, `kasad_push_errors_total{target}`): a
+target that is away gets its readings when it is back, up to two hours'
+worth.
 
 Wi-Fi plugs are unreliable, so polling never waits on a scrape. When a device
 stops answering, nothing more is pushed for it (a gap in the graph, not a flat
@@ -150,7 +163,7 @@ curl localhost:9881/metrics
 | `--poll-interval` | `15s` | |
 | `--discover-interval` | `15m` | how soon a new device, or one with a new address, appears |
 | `--expire` | `10m` | forget a discovered device after this long unheard |
-| `--prometheus-url` | | push readings here (Prometheus with `--web.enable-remote-write-receiver`) |
+| `--push` | | `name=url` of a remote write receiver to push every reading to; repeatable |
 | `--job` | `kasad` | `job` label on pushed series |
 
 Discovery packets get lost on Wi-Fi, so each probe is sent twice and devices
@@ -194,10 +207,12 @@ Then configure it, for example in `configuration.nix`:
     enable = true;
     broadcast = [ "192.168.1.255" ];             # your LAN's broadcast address
     credentialsFile = "/etc/kasad/credentials";  # only for KLAP devices (EP25 and newer)
-    prometheus.enable = true;                    # pushes readings, and a scrape job for health
+    prometheus.enable = true;                    # push to and be scraped by the local store
   };
-  # Once, even if several exporters push: Prometheus refuses the flag twice.
-  services.prometheus.extraFlags = [ "--web.enable-remote-write-receiver" ];
+  services.victoriametrics.enable = true;
+  # Or Prometheus with the receiver on; set the flag once, even if several
+  # exporters push: Prometheus refuses it twice.
+  # services.prometheus.extraFlags = [ "--web.enable-remote-write-receiver" ];
 
   # Let discovery replies in (see Firewall above).
   networking.nftables.enable = true;
@@ -229,8 +244,10 @@ http://127.0.0.1:9881/.
 | `pollInterval`, `discoverInterval`, `expire` | `"15s"`, `"15m"`, `"10m"` | Go durations |
 | `rooms` | `[ ]` | group the page's cards: `[ { name = "Kitchen"; devices = [ "Kettle" ]; } ]` |
 | `downstream` | `{ }` | devices plugged into another metered device: `{ "Speakers" = "Desk"; }` |
-| `prometheus.enable` | `false` | push every reading, and a scrape job for `/metrics`; asserts the receiver flag is on |
-| `prometheus.url` | from `services.prometheus` | where to push |
+| `push.<name>.url` | `{ }` | more remote write targets; their hosts' scrapes should drop `pushed_<name>` |
+| `prometheus.enable` | `false` | push to the local `services.victoriametrics` (else `services.prometheus`) and register a scrape job that drops what it was pushed; for Prometheus, asserts the receiver flag |
+| `prometheus.pushName` | host name, `-` and `.` as `_` | the local target's name |
+| `prometheus.url` | from the local store | where to push |
 | `prometheus.jobName`, `.scrapeInterval` | `"kasad"`, `"60s"` | the `job` label (scraped and pushed), scrape interval |
 | `openFirewall` | `false` | open the TCP port of `listen` |
 | `extraArgs` | `[ ]` | extra command-line flags |

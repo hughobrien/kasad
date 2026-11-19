@@ -86,28 +86,47 @@
       formatter = pkgs.nixpkgs-fmt;
     });
 
-    moduleSystem = nixpkgs.lib.nixosSystem {
+    moduleSystem = extra: nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         self.nixosModules.default
         {
           boot.isContainer = true;
           system.stateVersion = "26.05";
+          networking.hostName = "my-host";
           services.kasad = {
             enable = true;
             openFirewall = true;
             rooms = [{ name = "Kitchen"; devices = [ "Kettle" ]; }];
             downstream = { "Speakers" = "Desk"; };
+            prometheus.enable = true;
+            push.offsite.url = "http://offsite:8428";
           };
         }
+        extra
       ];
     };
     # Evaluation fails (so the check does) if the options stop doing their job.
     moduleCheck =
-      let c = moduleSystem.config; in
-      assert builtins.elem 9881 c.networking.firewall.allowedTCPPorts;
-      assert nixpkgs.lib.hasInfix "--metadata" c.systemd.services.kasad.serviceConfig.ExecStart;
-      c.systemd.units."kasad.service".unit;
+      let
+        vm = (moduleSystem { services.victoriametrics.enable = true; }).config;
+        prom = (moduleSystem {
+          services.prometheus.enable = true;
+          services.prometheus.extraFlags = [ "--web.enable-remote-write-receiver" ];
+        }).config;
+        lib = nixpkgs.lib;
+        job = jobs: lib.findFirst (j: j.job_name == "kasad") null jobs;
+        drops = j: lib.any (r: r.source_labels == [ "pushed_my_host" ] && r.regex == "true" && r.action == "drop") j.metric_relabel_configs;
+      in
+      assert lib.hasInfix "my_host=http://127.0.0.1:8428" (vm.systemd.services.kasad.serviceConfig.ExecStart);
+      assert lib.hasInfix "offsite=http://offsite:8428" (vm.systemd.services.kasad.serviceConfig.ExecStart);
+      assert drops (job vm.services.victoriametrics.prometheusConfig.scrape_configs);
+      assert vm.services.prometheus.scrapeConfigs == [ ];
+      assert lib.hasInfix "my_host=http://127.0.0.1:9090" (prom.systemd.services.kasad.serviceConfig.ExecStart);
+      assert drops (job prom.services.prometheus.scrapeConfigs);
+      assert builtins.elem 9881 vm.networking.firewall.allowedTCPPorts;
+      assert lib.hasInfix "--metadata" vm.systemd.services.kasad.serviceConfig.ExecStart;
+      vm.systemd.units."kasad.service".unit;
 
     defaultModule = { pkgs, lib, ... }: {
       imports = [ ./nix/module.nix ];
