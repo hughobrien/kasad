@@ -16,6 +16,7 @@
 
 let
   cfg = config.services.kasad;
+  pushing = cfg.prometheus.enable && config.services.prometheus.enable;
 
   metadata = pkgs.writeText "kasad-metadata.json" (builtins.toJSON {
     inherit (cfg) rooms downstream;
@@ -95,8 +96,12 @@ in {
 
     discoverInterval = lib.mkOption {
       type = lib.types.str;
-      default = "1m";
-      description = "How often to broadcast for new devices (a Go duration).";
+      default = "15m";
+      description = ''
+        How often to broadcast for new devices (a Go duration). A device that
+        answers its polls never expires, so this only sets how soon a new
+        device, or one with a new address, appears.
+      '';
     };
 
     expire = lib.mkOption {
@@ -110,9 +115,19 @@ in {
         type = lib.types.bool;
         default = false;
         description = ''
-          When true and `services.prometheus.enable` is also true, register
-          a scrape job for kasad's `/metrics` endpoint automatically.
+          When true and `services.prometheus.enable` is also true, push every
+          reading to Prometheus with remote write and register a scrape job
+          for kasad's `/metrics` endpoint (health). Prometheus needs
+          `--web.enable-remote-write-receiver` in its `extraFlags`.
         '';
+      };
+      url = lib.mkOption {
+        type = lib.types.str;
+        default =
+          let p = config.services.prometheus;
+          in "http://${if p.listenAddress == "0.0.0.0" || p.listenAddress == "" then "127.0.0.1" else p.listenAddress}:${toString p.port}";
+        defaultText = lib.literalExpression ''"http://''${services.prometheus.listenAddress}:''${toString services.prometheus.port}"'';
+        description = "Prometheus base URL; readings go to `<url>/api/v1/write`.";
       };
       jobName = lib.mkOption {
         type = lib.types.str;
@@ -122,7 +137,7 @@ in {
       scrapeInterval = lib.mkOption {
         type = lib.types.str;
         default = "60s";
-        description = "Scrape interval. kasad serves cached readings, so this can be longer than `pollInterval`.";
+        description = "Scrape interval for /metrics. With push on it only carries health, so it can be longer than `pollInterval`.";
       };
     };
 
@@ -187,7 +202,7 @@ in {
     systemd.services.kasad = {
       description = "TP-Link Kasa Prometheus exporter";
       wants = [ "network-online.target" ];
-      after = [ "network-online.target" ];
+      after = [ "network-online.target" ] ++ lib.optional pushing "prometheus.service";
       wantedBy = [ "multi-user.target" ];
 
       serviceConfig = sandbox // {
@@ -198,6 +213,9 @@ in {
           "--poll-interval" cfg.pollInterval
           "--discover-interval" cfg.discoverInterval
           "--expire" cfg.expire
+        ] ++ lib.optionals pushing [
+          "--prometheus-url" (lib.escapeShellArg cfg.prometheus.url)
+          "--job" (lib.escapeShellArg cfg.prometheus.jobName)
         ] ++ lib.optionals (cfg.hosts != [ ]) [
           "--hosts" (lib.escapeShellArg (lib.concatStringsSep "," cfg.hosts))
         ] ++ lib.optionals (cfg.credentialsFile != null) [
@@ -218,6 +236,14 @@ in {
 
     networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall
       (lib.toInt (lib.last (lib.splitString ":" cfg.listen)));
+
+    # kasad pushes each reading with remote write. The receiver flag is set
+    # once by the host (Prometheus refuses a repeated flag, and several
+    # exporters push), so only check it is there.
+    assertions = [{
+      assertion = !pushing || lib.elem "--web.enable-remote-write-receiver" config.services.prometheus.extraFlags;
+      message = "services.kasad.prometheus.enable pushes readings: add \"--web.enable-remote-write-receiver\" to services.prometheus.extraFlags.";
+    }];
 
     # Auto-wire a Prometheus scrape job when both services are enabled.
     services.prometheus.scrapeConfigs = lib.mkIf

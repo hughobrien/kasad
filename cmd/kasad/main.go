@@ -20,6 +20,7 @@ import (
 
 	"github.com/hughobrien/kasad/internal/exporter"
 	"github.com/hughobrien/kasad/internal/kasa"
+	"github.com/hughobrien/kasad/internal/promwrite"
 	"github.com/hughobrien/kasad/internal/web"
 	"github.com/hughobrien/kasad/internal/web/templates"
 	"github.com/hughobrien/kasad/internal/web/ui"
@@ -51,7 +52,9 @@ func run() error {
 		broadcast = flag.String("broadcast", "255.255.255.255", "comma-separated discovery targets (IPv4 broadcast addresses)")
 		hosts     = flag.String("hosts", "", "comma-separated devices to poll even if discovery misses them")
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
-		discover  = flag.Duration("discover-interval", time.Minute, "how often to broadcast for new devices")
+		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")
+		promURL   = flag.String("prometheus-url", "", "Prometheus to push every reading to (remote write receiver enabled); empty serves readings on /metrics instead")
+		job       = flag.String("job", "kasad", "job label on pushed series")
 		expire    = flag.Duration("expire", 10*time.Minute, "drop a discovered device after this long unseen")
 		pollTO    = flag.Duration("poll-timeout", 5*time.Second, "timeout for one poll attempt")
 		metaPath  = flag.String("metadata", "", "JSON file naming rooms and devices plugged into other devices (see README); optional")
@@ -71,6 +74,7 @@ func run() error {
 		Expire:           *expire,
 		PollTimeout:      *pollTO,
 		DiscoverWait:     3 * time.Second,
+		Job:              *job,
 	}
 	if *credsPath != "" {
 		c, err := readCreds(*credsPath)
@@ -81,7 +85,11 @@ func run() error {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	e := exporter.New(cfg, log)
+	var store exporter.Store
+	if *promURL != "" {
+		store = &promwrite.Client{Base: *promURL}
+	}
+	e := exporter.New(cfg, store, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -1,5 +1,6 @@
 // Package exporter keeps the set of known devices, polls them in the
-// background and renders the last results as Prometheus metrics.
+// background, pushes every reading to Prometheus with remote write (at the
+// time it was taken) and serves health on /metrics.
 package exporter
 
 import (
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hughobrien/kasad/internal/kasa"
+	"github.com/hughobrien/kasad/internal/promwrite"
 )
 
 type kind int
@@ -32,6 +34,18 @@ type Config struct {
 	Expire           time.Duration // drop a discovered device unseen this long
 	PollTimeout      time.Duration
 	DiscoverWait     time.Duration
+	Job              string // job label on pushed series
+}
+
+// Store takes pushed samples (a *promwrite.Client).
+type Store interface {
+	Write(ctx context.Context, series []promwrite.Series) error
+}
+
+// queued is one successful poll waiting to be pushed.
+type queued struct {
+	at   time.Time
+	snap snapshot
 }
 
 type device struct {
@@ -77,13 +91,23 @@ type Exporter struct {
 	// subs are woken (coalesced, never blocking) whenever a device changes.
 	subs map[chan struct{}]struct{}
 
-	mu      sync.Mutex
-	devices map[string]*device
+	// store, when set, gets every reading; the measurements then leave
+	// /metrics. Nil serves them at scrape time instead.
+	store Store
+
+	mu         sync.Mutex
+	devices    map[string]*device
+	queue      []queued
+	pushErrors uint64
 }
 
-// New returns an Exporter; call Run to start it.
-func New(cfg Config, log *slog.Logger) *Exporter {
-	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(),
+// New returns an Exporter; call Run to start it. A non-nil store gets every
+// reading pushed.
+func New(cfg Config, store Store, log *slog.Logger) *Exporter {
+	if cfg.Job == "" {
+		cfg.Job = "kasad"
+	}
+	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(), store: store,
 		subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
 	for _, h := range cfg.Hosts {
 		e.devices[h] = &device{host: h, static: true}
@@ -174,6 +198,74 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	e.push(ctx)
+}
+
+// maxAge is how old a queued reading may get while Prometheus is away:
+// Prometheus refuses samples older than about an hour.
+const maxAge = 50 * time.Minute
+
+// push sends every queued reading in one write. On a failure Prometheus may
+// recover from, the queue is kept for the next round; a write it refused is
+// dropped, since sending it again would fail the same way.
+func (e *Exporter) push(ctx context.Context) {
+	if e.store == nil {
+		return
+	}
+	e.mu.Lock()
+	q := e.queue
+	e.queue = nil
+	e.mu.Unlock()
+	cutoff := e.now().Add(-maxAge)
+	for len(q) > 0 && q[0].at.Before(cutoff) {
+		q = q[1:]
+	}
+	if len(q) == 0 {
+		return
+	}
+	err := e.store.Write(ctx, e.series(q))
+	if err == nil {
+		return
+	}
+	var refused *promwrite.RefusedError
+	e.mu.Lock()
+	e.pushErrors++
+	if !errors.As(err, &refused) {
+		e.queue = append(q, e.queue...) // readings taken meanwhile go after
+	}
+	e.mu.Unlock()
+	e.log.Warn("push failed", "err", err, "kept", !errors.As(err, &refused), "readings", len(q))
+}
+
+// series turns queued readings into one series per metric and device, oldest
+// sample first.
+func (e *Exporter) series(q []queued) []promwrite.Series {
+	idx := map[string]int{}
+	var out []promwrite.Series
+	for _, r := range q {
+		alias, model := "", ""
+		if r.snap.last != nil {
+			alias, model = r.snap.last.Alias, r.snap.last.Model
+		}
+		for _, m := range metrics {
+			if !m.pushed {
+				continue
+			}
+			v, ok := m.value(r.snap)
+			if !ok {
+				continue
+			}
+			k := m.name + "\x00" + r.snap.host
+			i, seen := idx[k]
+			if !seen {
+				i, idx[k] = len(out), len(out)
+				out = append(out, promwrite.Series{Labels: map[string]string{"__name__": m.name, "job": e.cfg.Job,
+					"alias": alias, "host": r.snap.host, "model": model}})
+			}
+			out[i].Samples = append(out[i].Samples, promwrite.Sample{T: r.at, V: v})
+		}
+	}
+	return out
 }
 
 func (e *Exporter) pollOne(ctx context.Context, d *device) {
@@ -217,6 +309,9 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 	d.ok, d.last, d.lastOK, d.lastSeen = true, r, now, now
 	d.kind, d.klap = used, kl
 	d.writeErr = ""
+	if e.store != nil {
+		e.queue = append(e.queue, queued{now, snapshot{host: d.host, kind: d.kind, ok: true, lastOK: now, last: r}})
+	}
 	e.notify()
 }
 

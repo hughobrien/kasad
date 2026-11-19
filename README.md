@@ -2,8 +2,9 @@
 
 A Prometheus exporter and small control page for TP-Link Kasa smart plugs and
 switches. It finds devices on the LAN by itself, polls them in the background,
-serves the latest readings at `/metrics`, and shows them on a web page where
-each one can be switched on and off. Go, with `prometheus/client_golang`,
+pushes every reading to Prometheus with remote write (at the time it was
+taken), and shows them on a web page where each one can be switched on and
+off. Go, with `prometheus/client_golang`,
 templ and datastar like comfortd and breezyd.
 
 ## Screenshots
@@ -37,10 +38,22 @@ kasa_on_time_seconds  kasa_brightness_percent  kasa_rssi_dbm
 kasad_devices  kasad_build_info
 ```
 
-Wi-Fi plugs are unreliable, so polling is separate from scraping: `/metrics`
-never waits on a device. When a device stops answering, its measurements
-disappear (a gap in the graph, not a flat line of stale values), `kasa_up`
-goes to 0 and `kasa_last_success_timestamp_seconds` says when it last worked.
+With `--prometheus-url`, every successful poll (every 15 seconds, and right
+after a switch from the page) is pushed with remote write at the time it was
+taken: power, voltage, current, energy, relay, on-time, brightness and RSSI.
+None are lost to a scrape interval that differs from the poll's, and none are
+read twice. `/metrics` keeps the health: `kasa_up`,
+`kasa_last_success_timestamp_seconds`, `kasa_poll_errors_total`,
+`kasad_devices`, plus `kasad_push_errors_total` and
+`kasad_push_queued_readings`. If Prometheus is away, readings queue and go
+with the next push; ones older than 50 minutes are dropped, as Prometheus
+would refuse them. Without `--prometheus-url` the measurements are served on
+`/metrics` instead.
+
+Wi-Fi plugs are unreliable, so polling never waits on a scrape. When a device
+stops answering, nothing more is pushed for it (a gap in the graph, not a flat
+line of stale values), `kasa_up` goes to 0 and
+`kasa_last_success_timestamp_seconds` says when it last worked.
 
 ## Web UI
 
@@ -135,11 +148,15 @@ curl localhost:9881/metrics
 | `--hosts` | | devices to poll even if discovery misses them |
 | `--credentials` | | TP-Link account file for newer devices |
 | `--poll-interval` | `15s` | |
-| `--discover-interval` | `1m` | |
+| `--discover-interval` | `15m` | how soon a new device, or one with a new address, appears |
 | `--expire` | `10m` | forget a discovered device after this long unheard |
+| `--prometheus-url` | | push readings here (Prometheus with `--web.enable-remote-write-receiver`) |
+| `--job` | `kasad` | `job` label on pushed series |
 
 Discovery packets get lost on Wi-Fi, so each probe is sent twice and devices
-are only dropped after `--expire`.
+are only dropped after `--expire` without a reply to discovery or to a poll.
+A device that answers its polls never expires, so discovery only has to find
+new ones.
 
 ## NixOS
 
@@ -177,8 +194,10 @@ Then configure it, for example in `configuration.nix`:
     enable = true;
     broadcast = [ "192.168.1.255" ];             # your LAN's broadcast address
     credentialsFile = "/etc/kasad/credentials";  # only for KLAP devices (EP25 and newer)
-    prometheus.enable = true;                    # adds a scrape job if services.prometheus is on
+    prometheus.enable = true;                    # pushes readings, and a scrape job for health
   };
+  # Once, even if several exporters push: Prometheus refuses the flag twice.
+  services.prometheus.extraFlags = [ "--web.enable-remote-write-receiver" ];
 
   # Let discovery replies in (see Firewall above).
   networking.nftables.enable = true;
@@ -207,10 +226,12 @@ http://127.0.0.1:9881/.
 | `broadcast` | `[ "255.255.255.255" ]` | discovery targets; name the LAN's broadcast address on a multi-homed host |
 | `hosts` | `[ ]` | devices to poll even if discovery misses them |
 | `credentialsFile` | `null` | TP-Link account file; without it KLAP-only devices are skipped |
-| `pollInterval`, `discoverInterval`, `expire` | `"15s"`, `"1m"`, `"10m"` | Go durations |
+| `pollInterval`, `discoverInterval`, `expire` | `"15s"`, `"15m"`, `"10m"` | Go durations |
 | `rooms` | `[ ]` | group the page's cards: `[ { name = "Kitchen"; devices = [ "Kettle" ]; } ]` |
 | `downstream` | `{ }` | devices plugged into another metered device: `{ "Speakers" = "Desk"; }` |
-| `prometheus.enable`, `.jobName`, `.scrapeInterval` | `false`, `"kasad"`, `"60s"` | auto-registered scrape job |
+| `prometheus.enable` | `false` | push every reading, and a scrape job for `/metrics`; asserts the receiver flag is on |
+| `prometheus.url` | from `services.prometheus` | where to push |
+| `prometheus.jobName`, `.scrapeInterval` | `"kasad"`, `"60s"` | the `job` label (scraped and pushed), scrape interval |
 | `openFirewall` | `false` | open the TCP port of `listen` |
 | `extraArgs` | `[ ]` | extra command-line flags |
 
