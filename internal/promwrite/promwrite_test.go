@@ -180,7 +180,7 @@ func TestNewest(t *testing.T) {
 	reply := `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1762333500,"1762333260"]}]}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q = r.URL.Query().Get("query")
-		io.WriteString(w, reply)
+		_, _ = io.WriteString(w, reply)
 	}))
 	defer srv.Close()
 	c := &Client{Base: srv.URL}
