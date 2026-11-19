@@ -143,17 +143,76 @@ are only dropped after `--expire`.
 
 ## NixOS
 
+The flake has a package and a NixOS module. Add it as an input and put the
+module in your system's `modules` list:
+
 ```nix
+# flake.nix
 {
-  imports = [ inputs.kasad.nixosModules.default ];
-  services.kasad = {
-    enable = true;
-    broadcast = [ "192.168.1.255" ];
-    credentialsFile = "/persist/kasad/credentials";
-    prometheus.enable = true;   # adds the scrape job when services.prometheus is on
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    kasad = {
+      url = "github:hughobrien/kasad";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+
+  outputs = { nixpkgs, kasad, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        kasad.nixosModules.default # services.kasad.package defaults to this flake's build
+        ./configuration.nix
+      ];
+    };
   };
 }
 ```
+
+Then configure it, for example in `configuration.nix`:
+
+```nix
+{
+  services.kasad = {
+    enable = true;
+    broadcast = [ "192.168.1.255" ];             # your LAN's broadcast address
+    credentialsFile = "/etc/kasad/credentials";  # only for KLAP devices (EP25 and newer)
+    prometheus.enable = true;                    # adds a scrape job if services.prometheus is on
+  };
+
+  # Let discovery replies in (see Firewall above).
+  networking.nftables.enable = true;
+  networking.firewall.extraInputRules = ''
+    iifname "eth0" udp sport { 9999, 20002 } accept
+  '';
+}
+```
+
+The credentials file holds the TP-Link account email on the first line and
+the password on the second. systemd hands it to the service
+(`LoadCredential`), so it can stay root-only:
+
+```sh
+sudo install -d -m 700 /etc/kasad
+sudo install -m 600 /dev/null /etc/kasad/credentials
+sudoedit /etc/kasad/credentials
+```
+
+After `nixos-rebuild switch`, the page and `/metrics` are on
+http://127.0.0.1:9881/.
+
+| Option | Default | |
+|---|---|---|
+| `listen` | `"127.0.0.1:9881"` | page, `/metrics` and `/healthz` |
+| `broadcast` | `[ "255.255.255.255" ]` | discovery targets; name the LAN's broadcast address on a multi-homed host |
+| `hosts` | `[ ]` | devices to poll even if discovery misses them |
+| `credentialsFile` | `null` | TP-Link account file; without it KLAP-only devices are skipped |
+| `pollInterval`, `discoverInterval`, `expire` | `"15s"`, `"1m"`, `"10m"` | Go durations |
+| `rooms` | `[ ]` | group the page's cards: `[ { name = "Kitchen"; devices = [ "Kettle" ]; } ]` |
+| `downstream` | `{ }` | devices plugged into another metered device: `{ "Speakers" = "Desk"; }` |
+| `prometheus.enable`, `.jobName`, `.scrapeInterval` | `false`, `"kasad"`, `"60s"` | auto-registered scrape job |
+| `openFirewall` | `false` | open the TCP port of `listen` |
+| `extraArgs` | `[ ]` | extra command-line flags |
 
 ## Development
 
