@@ -38,7 +38,7 @@
         src = ./.;
         # When go.mod/go.sum change, set this to pkgs.lib.fakeHash, build, and
         # paste the `got:` hash.
-        vendorHash = pkgs.lib.fakeHash;
+        vendorHash = "sha256-jlcmrpCImTBUHdA+wSrmOaVQPzDeMx9hY5o4+jRdyLA=";
         subPackages = [ "cmd/kasad" ];
         ldflags = [ "-s" "-w" "-X main.version=${version}" ];
         doCheck = true;

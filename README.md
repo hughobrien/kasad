@@ -1,8 +1,10 @@
 # kasad
 
-A Prometheus exporter for TP-Link Kasa smart plugs and switches. It finds
-devices on the LAN by itself, polls them in the background and serves the
-latest readings at `/metrics`. Go, with `prometheus/client_golang` like comfortd and breezyd.
+A Prometheus exporter and small control page for TP-Link Kasa smart plugs and
+switches. It finds devices on the LAN by itself, polls them in the background,
+serves the latest readings at `/metrics`, and shows them on a web page where
+each one can be switched on and off. Go, with `prometheus/client_golang`,
+templ and datastar like comfortd and breezyd.
 
 ## What it reads
 
@@ -30,6 +32,28 @@ never waits on a device. When a device stops answering, its measurements
 disappear (a gap in the graph, not a flat line of stale values), `kasa_up`
 goes to 0 and `kasa_last_success_timestamp_seconds` says when it last worked.
 
+## Web UI
+
+`/` is a page with a card per device: on/off switch, current power in W,
+energy today and this month in kWh (as recorded by the device itself), and
+Wi-Fi signal. The header shows the combined draw and how many devices answer.
+It updates live (server-sent events), including changes made from the Kasa app
+or a wall switch. A switch sends the state it wants, never a toggle, and the
+card then shows what the device reports. Offline devices are dimmed and their
+switch is disabled.
+
+There is no login: put it behind something that is already restricted (it is
+served at `kasad.wg` on a private network). Cross-site requests to the switch
+are refused, so another website open in a browser on that network cannot drive
+it.
+
+| Route | |
+|---|---|
+| `GET /` | the page |
+| `GET /ui/sse` | live updates |
+| `POST /ui/devices/{host}/relay?on=true\|false` | switch a device |
+| `GET /metrics`, `GET /healthz` | Prometheus, liveness |
+
 ## Running
 
 ```
@@ -39,7 +63,7 @@ curl localhost:9881/metrics
 
 | Flag | Default | |
 |---|---|---|
-| `--listen` | `127.0.0.1:9881` | HTTP address; `/` lists devices, `/healthz` for liveness |
+| `--listen` | `127.0.0.1:9881` | HTTP address for the page, `/metrics` and `/healthz` |
 | `--broadcast` | `255.255.255.255` | comma-separated discovery targets. On a host with several interfaces, name the LAN's broadcast address |
 | `--hosts` | | devices to poll even if discovery misses them |
 | `--credentials` | | TP-Link account file for newer devices |
@@ -66,7 +90,7 @@ are only dropped after `--expire`.
 
 ## Development
 
-`go test ./...`. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate`
+`go test ./...`. After editing a `.templ` file run `just generate` (templ 0.3.1118, the version the flake pins) and commit the `*_templ.go` files. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate`
 (`just gate` runs it on a remote Nix host).
 
 Licensed GPL-3.0-or-later.
