@@ -3,6 +3,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -12,8 +13,10 @@ import (
 // CardView is one device card. Display strings are empty when the value is
 // absent (an unmetered switch has no power; a down device has no readings).
 type CardView struct {
-	ID, Host, Name, Model               string
+	ID, Host, Name, Kind                string // Kind: Socket, Light Switch, ...
 	Up, On, HasState                    bool
+	Dimmable                            bool
+	Brightness                          int // percent, 0 when unknown
 	Power, Today, Month, RSSI, LastSeen string
 	Err                                 string
 }
@@ -31,7 +34,7 @@ func NewCard(d exporter.DeviceView, now time.Time) CardView {
 		ID:       "device-" + safeID(d.Host),
 		Host:     d.Host,
 		Name:     d.Alias,
-		Model:    d.Model,
+		Kind:     deviceKind(d.Model, d.Brightness),
 		Up:       d.Up,
 		On:       d.On,
 		HasState: d.HasState,
@@ -40,6 +43,10 @@ func NewCard(d exporter.DeviceView, now time.Time) CardView {
 	}
 	if c.Name == "" {
 		c.Name = d.Host
+	}
+	c.Dimmable = isDimmable(d.Model, d.Brightness)
+	if d.Brightness != nil {
+		c.Brightness = int(math.Round(*d.Brightness))
 	}
 	if d.PowerWatts != nil {
 		c.Power = formatW(*d.PowerWatts)
@@ -110,4 +117,24 @@ func ago(now, t time.Time) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
+
+func isDimmable(model string, brightness *float64) bool {
+	m := strings.ToUpper(model)
+	return brightness != nil || strings.HasPrefix(m, "KS220") || strings.HasPrefix(m, "HS220")
+}
+
+// deviceKind says what a device is, not which model. An unrecognised model is
+// shown as is rather than mislabelled.
+func deviceKind(model string, brightness *float64) string {
+	m := strings.ToUpper(model)
+	switch {
+	case isDimmable(model, brightness):
+		return "Light Switch (Dimmable)"
+	case strings.HasPrefix(m, "KS200"), strings.HasPrefix(m, "HS200"):
+		return "Light Switch"
+	case strings.HasPrefix(m, "KP"), strings.HasPrefix(m, "EP"), strings.HasPrefix(m, "HS1"):
+		return "Socket"
+	}
+	return model
 }

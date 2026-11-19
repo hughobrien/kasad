@@ -50,18 +50,20 @@ type device struct {
 
 // backend is the device I/O, a seam so tests need no network.
 type backend struct {
-	pollLegacy func(ctx context.Context, host string, now time.Time) (*kasa.Reading, error)
-	pollKLAP   func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error)
-	setLegacy  func(ctx context.Context, host string, on bool) error
-	setKLAP    func(ctx context.Context, k *kasa.KLAP, on bool) error
+	pollLegacy    func(ctx context.Context, host string, now time.Time) (*kasa.Reading, error)
+	pollKLAP      func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error)
+	setLegacy     func(ctx context.Context, host string, on bool) error
+	setKLAP       func(ctx context.Context, k *kasa.KLAP, on bool) error
+	setBrightness func(ctx context.Context, host string, pct int) error
 }
 
 func realBackend() backend {
 	return backend{
-		pollLegacy: kasa.PollLegacy,
-		pollKLAP:   func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error) { return k.Poll(ctx) },
-		setLegacy:  kasa.SetLegacyRelay,
-		setKLAP:    func(ctx context.Context, k *kasa.KLAP, on bool) error { return k.SetDeviceOn(ctx, on) },
+		pollLegacy:    kasa.PollLegacy,
+		pollKLAP:      func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error) { return k.Poll(ctx) },
+		setLegacy:     kasa.SetLegacyRelay,
+		setBrightness: kasa.SetLegacyBrightness,
+		setKLAP:       func(ctx context.Context, k *kasa.KLAP, on bool) error { return k.SetDeviceOn(ctx, on) },
 	}
 }
 
@@ -246,6 +248,35 @@ func (e *Exporter) Subscribe() (<-chan struct{}, func()) {
 // SetRelay switches a known device on or off, then polls it straight away so
 // the view reports what the device says rather than what we asked for.
 func (e *Exporter) SetRelay(ctx context.Context, host string, on bool) error {
+	return e.write(ctx, host, func(d *device) error { return nil },
+		func(c context.Context) error { return e.be.setLegacy(c, host, on) },
+		func(c context.Context, kl *kasa.KLAP) error { return e.be.setKLAP(c, kl, on) })
+}
+
+// ErrNotDimmable is returned for a brightness write to a device without a dimmer.
+var ErrNotDimmable = errors.New("device is not a dimmer")
+
+// SetBrightness sets a dimmer's brightness (1-100). Only legacy dimmers exist
+// on the LAN; a KLAP device is refused.
+func (e *Exporter) SetBrightness(ctx context.Context, host string, pct int) error {
+	if pct < 1 || pct > 100 {
+		return fmt.Errorf("brightness %d out of range 1-100", pct)
+	}
+	return e.write(ctx, host,
+		func(d *device) error {
+			if d.last == nil || d.last.Brightness == nil || d.kind != kindLegacy {
+				return ErrNotDimmable
+			}
+			return nil
+		},
+		func(c context.Context) error { return e.be.setBrightness(c, host, pct) },
+		nil)
+}
+
+// write looks up the host, checks it with allow, writes with the device's
+// protocol (klapSet nil = not supported), then polls it straight away.
+func (e *Exporter) write(ctx context.Context, host string, allow func(*device) error,
+	legacySet func(context.Context) error, klapSet func(context.Context, *kasa.KLAP) error) error {
 	e.mu.Lock()
 	d, ok := e.devices[host]
 	if !ok {
@@ -253,26 +284,32 @@ func (e *Exporter) SetRelay(ctx context.Context, host string, on bool) error {
 		return fmt.Errorf("unknown device %q", host)
 	}
 	k, kl := d.kind, d.klap
+	err := allow(d)
 	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
 
 	var set func(context.Context) error
 	switch k {
 	case kindLegacy:
-		set = func(c context.Context) error { return e.be.setLegacy(c, host, on) }
+		set = legacySet
 	case kindKLAP:
+		if klapSet == nil {
+			return ErrNotDimmable
+		}
 		if e.cfg.Creds == nil {
 			return errors.New("device needs KLAP but no credentials are configured")
 		}
 		if kl == nil {
 			kl = kasa.NewKLAP(host, *e.cfg.Creds)
 		}
-		set = func(c context.Context) error { return e.be.setKLAP(c, kl, on) }
+		set = func(c context.Context) error { return klapSet(c, kl) }
 	default:
 		return fmt.Errorf("device %q has not answered yet", host)
 	}
 
 	// Setting a state is idempotent, so one retry is safe on flaky Wi-Fi.
-	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		if err = ctx.Err(); err != nil {
 			break

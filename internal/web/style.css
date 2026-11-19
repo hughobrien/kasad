@@ -9,8 +9,8 @@ h1 { margin:0; font-size:1.1rem; }
 h2 { margin:0; font-size:1rem; overflow-wrap:anywhere; }
 .summary { margin:0; color:var(--weak); }
 .summary b { color:var(--fg); font-size:1.1rem; margin-right:.6rem; font-variant-numeric:tabular-nums; }
-#devices { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(15rem,100%), 1fr)); gap:1rem; padding:1rem; align-items:start; }
-.card { background:var(--card); border:1px solid var(--border); border-radius:6px; padding:.6rem .8rem; }
+#devices { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(15rem,100%), 1fr)); gap:1rem; padding:1rem; align-items:stretch; }
+.card { height:11rem; overflow:hidden; background:var(--card); border:1px solid var(--border); border-radius:6px; padding:.6rem .8rem; }
 .card.offline { opacity:.6; }
 .card .head { display:flex; gap:.5rem; justify-content:space-between; align-items:center; }
 .card .sub { color:var(--weak); margin-bottom:.4rem; }
@@ -26,3 +26,6 @@ h2 { margin:0; font-size:1rem; overflow-wrap:anywhere; }
 .power-toggle:focus-visible { outline:2px solid var(--on); outline-offset:1px; }
 .power-toggle:disabled { cursor:default; opacity:.5; }
 .power-toggle.pending { outline:2px dashed var(--weak); outline-offset:1px; }
+
+.card .dim { display:flex; gap:.4rem; align-items:center; margin:.2rem 0; color:var(--weak); }
+.card .dim input { width:4.5rem; font:inherit; text-align:right; }

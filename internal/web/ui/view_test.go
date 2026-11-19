@@ -16,7 +16,7 @@ func TestNewCardFormats(t *testing.T) {
 		Host: "10.0.0.1", Alias: "Lamp", Model: "KP125(US)", Up: true, On: true, HasState: true,
 		PowerWatts: f(5.627), EnergyTodayKWh: f(0.003), EnergyMonthKWh: f(1.185), RSSI: f(-63), LastOK: now,
 	}, now)
-	if c.ID != "device-10-0-0-1" || c.Name != "Lamp" || c.Model != "KP125(US)" {
+	if c.ID != "device-10-0-0-1" || c.Name != "Lamp" || c.Kind != "Socket" {
 		t.Fatalf("identity = %+v", c)
 	}
 	if c.Power != "5.6 W" || c.Today != "0.003 kWh" || c.Month != "1.19 kWh" || c.RSSI != "-63 dBm" {
@@ -71,5 +71,39 @@ func TestNewPageTotals(t *testing.T) {
 	}
 	if e := NewPage(nil, now); e.TotalPower != "0.0 W" || e.UpCount != 0 || e.Total != 0 {
 		t.Fatalf("empty page = %+v", e)
+	}
+}
+
+func TestDeviceKind(t *testing.T) {
+	for _, tc := range []struct {
+		model  string
+		bright *float64
+		want   string
+	}{
+		{"KP125(US)", nil, "Socket"},
+		{"EP25(US)", nil, "Socket"},
+		{"HS103(US)", nil, "Socket"},
+		{"KS200(US)", nil, "Light Switch"},
+		{"HS200(US)", nil, "Light Switch"},
+		{"KS220(US)", f(30), "Light Switch (Dimmable)"},
+		{"HS220(US)", nil, "Light Switch (Dimmable)"},
+		{"KS200(US)", f(30), "Light Switch (Dimmable)"}, // reports a brightness: dimmable
+		{"XYZ9", nil, "XYZ9"},                           // unknown: show the model, never mislabel
+		{"", nil, ""},
+	} {
+		if got := deviceKind(tc.model, tc.bright); got != tc.want {
+			t.Errorf("deviceKind(%q, %v) = %q, want %q", tc.model, tc.bright, got, tc.want)
+		}
+	}
+}
+
+func TestNewCardBrightness(t *testing.T) {
+	c := NewCard(exporter.DeviceView{Host: "10.0.0.3", Alias: "Down", Model: "KS220(US)", Up: true, Brightness: f(46.4)}, now)
+	if !c.Dimmable || c.Brightness != 46 || c.Kind != "Light Switch (Dimmable)" {
+		t.Fatalf("%+v", c)
+	}
+	p := NewCard(exporter.DeviceView{Host: "10.0.0.1", Model: "KP125(US)", Up: true}, now)
+	if p.Dimmable {
+		t.Fatal("a plug is not dimmable")
 	}
 }

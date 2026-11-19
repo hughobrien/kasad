@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -20,6 +21,7 @@ import (
 type Devices interface {
 	Devices() []exporter.DeviceView
 	SetRelay(ctx context.Context, host string, on bool) error
+	SetBrightness(ctx context.Context, host string, pct int) error
 	Subscribe() (<-chan struct{}, func())
 }
 
@@ -36,6 +38,7 @@ func Handler(d Devices, rest http.Handler) http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /ui/sse", s.sse)
 	mux.HandleFunc("POST /ui/devices/{host}/relay", s.relay)
+	mux.HandleFunc("POST /ui/devices/{host}/brightness", s.brightness)
 	mux.HandleFunc("GET /ui/static/style.css", serveAsset("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("GET /ui/static/favicon.svg", serveAsset("favicon.svg", "image/svg+xml"))
 	mux.HandleFunc("GET /ui/static/datastar.js", serveAsset(DatastarFile, "text/javascript; charset=utf-8"))
@@ -100,22 +103,55 @@ func (s *server) relay(w http.ResponseWriter, r *http.Request) {
 	if err := s.d.SetRelay(r.Context(), host, on); err != nil {
 		slog.Warn("switch failed", "host", host, "on", on, "err", err)
 	}
-	// Answer with the card as it now stands (carrying the error, if any):
-	// that also drops the click's pending style when the state did not change.
+	s.patchCard(w, r, host)
+}
+
+// patchCard answers with the card as it now stands (carrying the error, if
+// any): that also drops the click's pending style when nothing changed.
+func (s *server) patchCard(w http.ResponseWriter, r *http.Request, host string) {
 	sse := datastar.NewSSE(w, r)
-	for _, v := range s.d.Devices() {
-		if v.Host == host {
-			c := ui.NewCard(v, s.now())
-			_ = sse.PatchElementTempl(templates.Card(c), datastar.WithSelectorf("#%s", c.ID), datastar.WithModeOuter())
-		}
+	if v, ok := s.find(host); ok {
+		c := ui.NewCard(v, s.now())
+		_ = sse.PatchElementTempl(templates.Card(c), datastar.WithSelectorf("#%s", c.ID), datastar.WithModeOuter())
 	}
 }
 
 func (s *server) known(host string) bool {
+	_, ok := s.find(host)
+	return ok
+}
+
+func (s *server) find(host string) (exporter.DeviceView, bool) {
 	for _, v := range s.d.Devices() {
 		if v.Host == host {
-			return true
+			return v, true
 		}
 	}
-	return false
+	return exporter.DeviceView{}, false
+}
+
+func (s *server) brightness(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		http.Error(w, "cross-site request refused", http.StatusForbidden)
+		return
+	}
+	pct, err := strconv.Atoi(r.URL.Query().Get("pct"))
+	if err != nil || pct < 1 || pct > 100 {
+		http.Error(w, "pct must be a whole number from 1 to 100", http.StatusBadRequest)
+		return
+	}
+	host := r.PathValue("host")
+	v, ok := s.find(host)
+	if !ok {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	if !ui.NewCard(v, s.now()).Dimmable {
+		http.Error(w, "device is not a dimmer", http.StatusBadRequest)
+		return
+	}
+	if err := s.d.SetBrightness(r.Context(), host, pct); err != nil {
+		slog.Warn("brightness failed", "host", host, "pct", pct, "err", err)
+	}
+	s.patchCard(w, r, host)
 }

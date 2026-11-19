@@ -121,6 +121,35 @@ func SetLegacyRelay(ctx context.Context, host string, on bool) error {
 	return nil
 }
 
+// SetLegacyBrightness sets a legacy dimmer's stored brightness (1-100).
+// Devices coerce 0 to 1, so 0 is refused here rather than silently changed.
+func SetLegacyBrightness(ctx context.Context, host string, pct int) error {
+	if pct < 1 || pct > 100 {
+		return fmt.Errorf("brightness %d out of range 1-100", pct)
+	}
+	raw, err := legacyQuery(ctx, host, []byte(fmt.Sprintf(`{"smartlife.iot.dimmer":{"set_brightness":{"brightness":%d}}}`, pct)))
+	if err != nil {
+		return err
+	}
+	var r struct {
+		Dimmer struct {
+			Set *struct {
+				ErrCode int `json:"err_code"`
+			} `json:"set_brightness"`
+		} `json:"smartlife.iot.dimmer"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return fmt.Errorf("set_brightness reply: %w", err)
+	}
+	if r.Dimmer.Set == nil {
+		return errors.New("set_brightness: no result in reply")
+	}
+	if r.Dimmer.Set.ErrCode != 0 {
+		return fmt.Errorf("set_brightness: device error_code %d", r.Dimmer.Set.ErrCode)
+	}
+	return nil
+}
+
 // legacyNum is a JSON number that tells "absent" from zero.
 type legacyNum = *float64
 

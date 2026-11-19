@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -14,6 +15,7 @@ type fakeDevices struct {
 	devs         []exporter.DeviceView
 	sets         []string // "host=true"
 	setErr       error
+	brights      []string // "host=pct"
 	subs         map[chan struct{}]bool
 	unsubscribed atomic.Int32
 }
@@ -43,6 +45,26 @@ func (f *fakeDevices) SetRelay(_ context.Context, host string, on bool) error {
 	for i := range f.devs {
 		if f.devs[i].Host == host {
 			f.devs[i].On = on
+		}
+	}
+	return nil
+}
+
+func (f *fakeDevices) SetBrightness(_ context.Context, host string, pct int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.brights = append(f.brights, fmt.Sprintf("%s=%d", host, pct))
+	if f.setErr != nil {
+		for i := range f.devs {
+			if f.devs[i].Host == host {
+				f.devs[i].Err = f.setErr.Error()
+			}
+		}
+		return f.setErr
+	}
+	for i := range f.devs {
+		if f.devs[i].Host == host {
+			f.devs[i].Brightness = fl(float64(pct))
 		}
 	}
 	return nil
@@ -79,4 +101,10 @@ func fl(v float64) *float64 { return &v }
 func dev(host, alias string, watts float64) exporter.DeviceView {
 	return exporter.DeviceView{Host: host, Alias: alias, Model: "KP125(US)", Up: true, On: true, HasState: true,
 		PowerWatts: fl(watts), RSSI: fl(-60)}
+}
+
+func dimDev(host, alias string, pct float64) exporter.DeviceView {
+	d := dev(host, alias, 0)
+	d.Model, d.Brightness = "KS220(US)", fl(pct)
+	return d
 }

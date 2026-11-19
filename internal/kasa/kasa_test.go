@@ -426,3 +426,41 @@ func TestKLAPOffRelayMeansZeroPower(t *testing.T) {
 		t.Fatalf("off: power %v current %v", *r.PowerWatts, *r.CurrentAmps)
 	}
 }
+
+func TestSetLegacyBrightnessSendsRequest(t *testing.T) {
+	var got string
+	addr := fakeLegacy(t, func(req string) string {
+		got = req
+		return `{"smartlife.iot.dimmer":{"set_brightness":{"err_code":0}}}`
+	})
+	host, port, _ := net.SplitHostPort(addr)
+	old := legacyPortForTest
+	legacyPortForTest = port
+	defer func() { legacyPortForTest = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := SetLegacyBrightness(ctx, host, 42); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"smartlife.iot.dimmer":{"set_brightness":{"brightness":42}}}`; got != want {
+		t.Fatalf("request = %s, want %s", got, want)
+	}
+}
+
+func TestSetLegacyBrightnessErrors(t *testing.T) {
+	addr := fakeLegacy(t, func(string) string { return `{"smartlife.iot.dimmer":{"set_brightness":{"err_code":-1}}}` })
+	host, port, _ := net.SplitHostPort(addr)
+	old := legacyPortForTest
+	legacyPortForTest = port
+	defer func() { legacyPortForTest = old }()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := SetLegacyBrightness(ctx, host, 42); err == nil {
+		t.Fatal("err_code -1 must be an error")
+	}
+	for _, bad := range []int{0, -5, 101} {
+		if err := SetLegacyBrightness(ctx, host, bad); err == nil {
+			t.Errorf("%d%% must be refused before it reaches the device", bad)
+		}
+	}
+}

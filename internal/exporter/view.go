@@ -16,6 +16,7 @@ type DeviceView struct {
 	EnergyTodayKWh *float64 // as recorded by the device itself
 	EnergyMonthKWh *float64
 	RSSI           *float64
+	Brightness     *float64 // percent; non-nil only on dimmers
 
 	LastOK time.Time
 	Err    string // last failed write, empty once a poll succeeds
@@ -32,6 +33,7 @@ func (e *Exporter) Devices() []DeviceView {
 			v.Alias, v.Model = r.Alias, r.Model
 			if d.ok {
 				v.On, v.HasState, v.RSSI = r.On, r.HasState, r.RSSI
+				v.Brightness = r.Brightness
 				v.PowerWatts = r.PowerWatts
 				v.EnergyTodayKWh = whToKWh(r.EnergyTodayWh)
 				v.EnergyMonthKWh = whToKWh(r.EnergyMonthWh)

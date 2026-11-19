@@ -142,3 +142,49 @@ func TestRestFallsThrough(t *testing.T) {
 		t.Fatalf("body %q", w.Body.String())
 	}
 }
+
+func TestBrightnessPostCallsSetBrightness(t *testing.T) {
+	f := newFake(dimDev("10.0.0.5", "Down", 40))
+	w := post(newHandler(f), "/ui/devices/10.0.0.5/brightness?pct=70", fromPage)
+	if w.Code != 200 || len(f.brights) != 1 || f.brights[0] != "10.0.0.5=70" {
+		t.Fatalf("status %d, writes %v", w.Code, f.brights)
+	}
+	if !strings.Contains(w.Body.String(), `id="bright-device-10-0-0-5-70"`) {
+		t.Fatalf("response must patch the card with the new value:\n%s", w.Body.String())
+	}
+}
+
+func TestBrightnessRefusals(t *testing.T) {
+	f := newFake(dimDev("10.0.0.5", "Down", 40), dev("10.0.0.1", "Lamp", 5))
+	h := newHandler(f)
+	for target, want := range map[string]int{
+		"/ui/devices/10.0.0.5/brightness":         400,
+		"/ui/devices/10.0.0.5/brightness?pct=":    400,
+		"/ui/devices/10.0.0.5/brightness?pct=0":   400,
+		"/ui/devices/10.0.0.5/brightness?pct=101": 400,
+		"/ui/devices/10.0.0.5/brightness?pct=-3":  400,
+		"/ui/devices/10.0.0.5/brightness?pct=5.5": 400,
+		"/ui/devices/10.0.0.5/brightness?pct=abc": 400,
+		"/ui/devices/10.9.9.9/brightness?pct=50":  404,
+		"/ui/devices/10.0.0.1/brightness?pct=50":  400, // a plug is not a dimmer
+	} {
+		if w := post(h, target, fromPage); w.Code != want {
+			t.Errorf("%s: status %d, want %d", target, w.Code, want)
+		}
+	}
+	if w := post(h, "/ui/devices/10.0.0.5/brightness?pct=50", map[string]string{"Sec-Fetch-Site": "cross-site"}); w.Code != 403 {
+		t.Errorf("cross-site: %d", w.Code)
+	}
+	if len(f.brights) != 0 {
+		t.Fatalf("a refused request wrote: %v", f.brights)
+	}
+}
+
+func TestBrightnessErrorPatchesCard(t *testing.T) {
+	f := newFake(dimDev("10.0.0.5", "Down", 40))
+	f.setErr = errors.New("boom")
+	w := post(newHandler(f), "/ui/devices/10.0.0.5/brightness?pct=70", fromPage)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "boom") {
+		t.Fatalf("status %d:\n%s", w.Code, w.Body.String())
+	}
+}

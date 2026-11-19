@@ -12,7 +12,24 @@ templ Card(c ui.CardView) {
 			<h2>{ c.Name }</h2>
 			@powerToggle(c)
 		</div>
-		<div class="sub">{ c.Model }</div>
+		<div class="sub">{ c.Kind }</div>
+		if c.Dimmable && c.Up && c.Brightness > 0 {
+			<label class="dim">
+				Brightness
+				<input
+					type="number"
+					min="1"
+					max="100"
+					step="1"
+					inputmode="numeric"
+					id={ "bright-" + c.ID + "-" + strconv.Itoa(c.Brightness) }
+					value={ strconv.Itoa(c.Brightness) }
+					data-ignore-morph
+					data-on:change={ "@post('/ui/devices/" + c.Host + "/brightness?pct=' + el.value)" }
+				/>
+				%
+			</label>
+		}
 		if !c.Up {
 			<p class="offline-note">Offline · last seen { c.LastSeen }</p>
 		} else {

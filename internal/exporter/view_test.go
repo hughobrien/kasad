@@ -12,6 +12,7 @@ import (
 // stub records backend calls and returns canned results.
 type stub struct {
 	legacySets []bool
+	brightSets []int
 	klapSets   []bool
 	setErr     error
 	reading    *kasa.Reading
@@ -23,6 +24,10 @@ func (s *stub) install(e *Exporter) {
 		pollKLAP:   func(context.Context, *kasa.KLAP) (*kasa.Reading, error) { return s.reading, nil },
 		setLegacy: func(_ context.Context, _ string, on bool) error {
 			s.legacySets = append(s.legacySets, on)
+			return s.setErr
+		},
+		setBrightness: func(_ context.Context, _ string, pct int) error {
+			s.brightSets = append(s.brightSets, pct)
 			return s.setErr
 		},
 		setKLAP: func(_ context.Context, _ *kasa.KLAP, on bool) error {
@@ -177,5 +182,57 @@ func TestUnsubscribe(t *testing.T) {
 	case <-ch:
 		t.Fatal("delivery after unsubscribe")
 	default:
+	}
+}
+
+func dimmer(t *testing.T) (*Exporter, *stub) {
+	t.Helper()
+	e, s := stubbed(t)
+	b := 40.0
+	s.reading = &kasa.Reading{Alias: "Down", Model: "KS220(US)", On: true, HasState: true, Brightness: &b}
+	e.devices["10.0.0.1"].last = s.reading
+	return e, s
+}
+
+func TestSetBrightnessLegacyDimmer(t *testing.T) {
+	e, s := dimmer(t)
+	if err := e.SetBrightness(t.Context(), "10.0.0.1", 70); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.brightSets) != 1 || s.brightSets[0] != 70 {
+		t.Fatalf("writes = %v", s.brightSets)
+	}
+	if v := e.Devices()[0]; v.Brightness == nil || *v.Brightness != 40 {
+		t.Fatalf("view brightness = %v", v.Brightness)
+	}
+}
+
+func TestSetBrightnessRefusals(t *testing.T) {
+	e, s := dimmer(t)
+	if err := e.SetBrightness(t.Context(), "10.9.9.9", 50); err == nil {
+		t.Error("unknown host")
+	}
+	for _, bad := range []int{0, 101} {
+		if err := e.SetBrightness(t.Context(), "10.0.0.1", bad); err == nil {
+			t.Errorf("%d must be refused", bad)
+		}
+	}
+	e2, s2 := stubbed(t) // a plain plug, no brightness
+	if err := e2.SetBrightness(t.Context(), "10.0.0.1", 50); !errors.Is(err, ErrNotDimmable) {
+		t.Errorf("non-dimmer: %v", err)
+	}
+	if len(s.brightSets)+len(s2.brightSets) != 0 {
+		t.Fatal("no write for a refused request")
+	}
+}
+
+func TestSetBrightnessErrorRecorded(t *testing.T) {
+	e, s := dimmer(t)
+	s.setErr = errors.New("boom")
+	if err := e.SetBrightness(t.Context(), "10.0.0.1", 50); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(s.brightSets) != 2 || e.Devices()[0].Err == "" {
+		t.Fatalf("tries %d, view %+v", len(s.brightSets), e.Devices()[0])
 	}
 }
