@@ -5,6 +5,7 @@ package exporter
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
@@ -39,6 +40,7 @@ type device struct {
 	kind   kind
 	klap   *kasa.KLAP
 
+	writeErr string    // last failed write; cleared by the next successful poll
 	lastSeen time.Time // discovery reply or successful poll
 	lastOK   time.Time
 	ok       bool
@@ -46,11 +48,32 @@ type device struct {
 	last     *kasa.Reading // last good reading; labels survive an outage
 }
 
+// backend is the device I/O, a seam so tests need no network.
+type backend struct {
+	pollLegacy func(ctx context.Context, host string, now time.Time) (*kasa.Reading, error)
+	pollKLAP   func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error)
+	setLegacy  func(ctx context.Context, host string, on bool) error
+	setKLAP    func(ctx context.Context, k *kasa.KLAP, on bool) error
+}
+
+func realBackend() backend {
+	return backend{
+		pollLegacy: kasa.PollLegacy,
+		pollKLAP:   func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error) { return k.Poll(ctx) },
+		setLegacy:  kasa.SetLegacyRelay,
+		setKLAP:    func(ctx context.Context, k *kasa.KLAP, on bool) error { return k.SetDeviceOn(ctx, on) },
+	}
+}
+
 // Exporter owns the device table.
 type Exporter struct {
 	cfg Config
 	log *slog.Logger
 	now func() time.Time
+	be  backend
+
+	// subs are woken (coalesced, never blocking) whenever a device changes.
+	subs map[chan struct{}]struct{}
 
 	mu      sync.Mutex
 	devices map[string]*device
@@ -58,7 +81,8 @@ type Exporter struct {
 
 // New returns an Exporter; call Run to start it.
 func New(cfg Config, log *slog.Logger) *Exporter {
-	e := &Exporter{cfg: cfg, log: log, now: time.Now, devices: map[string]*device{}}
+	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(),
+		subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
 	for _, h := range cfg.Hosts {
 		e.devices[h] = &device{host: h, static: true}
 	}
@@ -181,6 +205,7 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 		}
 		d.ok = false
 		d.errors++
+		e.notify()
 		return
 	}
 	now := e.now()
@@ -189,6 +214,85 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 	}
 	d.ok, d.last, d.lastOK, d.lastSeen = true, r, now, now
 	d.kind, d.klap = used, kl
+	d.writeErr = ""
+	e.notify()
+}
+
+// notify wakes every subscriber. Callers hold e.mu.
+func (e *Exporter) notify() {
+	for ch := range e.subs {
+		select {
+		case ch <- struct{}{}:
+		default: // one wake-up is already pending
+		}
+	}
+}
+
+// Subscribe returns a channel that receives a value whenever any device
+// changes (a poll finished or a write was made); bursts coalesce. Call the
+// returned func to stop.
+func (e *Exporter) Subscribe() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	e.mu.Lock()
+	e.subs[ch] = struct{}{}
+	e.mu.Unlock()
+	return ch, func() {
+		e.mu.Lock()
+		delete(e.subs, ch)
+		e.mu.Unlock()
+	}
+}
+
+// SetRelay switches a known device on or off, then polls it straight away so
+// the view reports what the device says rather than what we asked for.
+func (e *Exporter) SetRelay(ctx context.Context, host string, on bool) error {
+	e.mu.Lock()
+	d, ok := e.devices[host]
+	if !ok {
+		e.mu.Unlock()
+		return fmt.Errorf("unknown device %q", host)
+	}
+	k, kl := d.kind, d.klap
+	e.mu.Unlock()
+
+	var set func(context.Context) error
+	switch k {
+	case kindLegacy:
+		set = func(c context.Context) error { return e.be.setLegacy(c, host, on) }
+	case kindKLAP:
+		if e.cfg.Creds == nil {
+			return errors.New("device needs KLAP but no credentials are configured")
+		}
+		if kl == nil {
+			kl = kasa.NewKLAP(host, *e.cfg.Creds)
+		}
+		set = func(c context.Context) error { return e.be.setKLAP(c, kl, on) }
+	default:
+		return fmt.Errorf("device %q has not answered yet", host)
+	}
+
+	// Setting a state is idempotent, so one retry is safe on flaky Wi-Fi.
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = ctx.Err(); err != nil {
+			break
+		}
+		cctx, cancel := context.WithTimeout(ctx, e.cfg.PollTimeout)
+		err = set(cctx)
+		cancel()
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		e.mu.Lock()
+		d.writeErr = err.Error()
+		e.notify()
+		e.mu.Unlock()
+		return err
+	}
+	e.pollOne(ctx, d)
+	return nil
 }
 
 // pollKind polls with the known protocol, or tries each when unknown.
@@ -200,17 +304,17 @@ func (e *Exporter) pollKind(ctx context.Context, host string, k kind, kl *kasa.K
 		if kl == nil {
 			kl = kasa.NewKLAP(host, *e.cfg.Creds)
 		}
-		r, err := kl.Poll(ctx)
+		r, err := e.be.pollKLAP(ctx, kl)
 		return r, kindKLAP, kl, err
 	}
 	switch k {
 	case kindLegacy:
-		r, err := kasa.PollLegacy(ctx, host, e.now())
+		r, err := e.be.pollLegacy(ctx, host, e.now())
 		return r, kindLegacy, kl, err
 	case kindKLAP:
 		return tryKLAP()
 	}
-	if r, err := kasa.PollLegacy(ctx, host, e.now()); err == nil {
+	if r, err := e.be.pollLegacy(ctx, host, e.now()); err == nil {
 		return r, kindLegacy, kl, nil
 	}
 	return tryKLAP()

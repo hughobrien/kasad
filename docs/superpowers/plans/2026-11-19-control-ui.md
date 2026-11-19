@@ -49,7 +49,7 @@
 
 **Interfaces:**
 - Produces:
-  - `type DeviceView struct { Host, Alias, Model string; Up, On, HasState bool; PowerWatts, EnergyTodayKWh, EnergyMonthKWh, RSSI *float64; LastOK time.Time; Err string }` (the energy fields are the device's watt-hours divided by 1000; `Err` is the last write or poll error text, empty when the last operation succeeded).
+  - `type DeviceView struct { Host, Alias, Model string; Up, On, HasState bool; PowerWatts, EnergyTodayKWh, EnergyMonthKWh, RSSI *float64; LastOK time.Time; Err string }` (the energy fields are the device's watt-hours divided by 1000; `Err` is the last failed write's error text, cleared by the next successful poll (a failed poll just shows as offline)).
   - `func (e *Exporter) Devices() []DeviceView`, sorted by alias then host.
   - `func (e *Exporter) SetRelay(ctx context.Context, host string, on bool) error`.
   - `func (e *Exporter) Subscribe() (<-chan struct{}, func())`. The channel has capacity 1 and notifications coalesce; calling the func unsubscribes and stops delivery.

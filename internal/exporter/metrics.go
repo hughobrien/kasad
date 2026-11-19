@@ -1,7 +1,6 @@
 package exporter
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 
@@ -108,7 +107,7 @@ func (c collector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-// Handler serves /metrics, /healthz and a plain-text device list at /.
+// Handler serves /metrics and /healthz.
 func (e *Exporter) Handler(version string) http.Handler {
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(
@@ -126,20 +125,6 @@ func (e *Exporter) Handler(version string) http.Handler {
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok\n")
-	})
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		for _, s := range e.snapshot() {
-			state := "down"
-			if s.ok {
-				state = "up"
-			}
-			alias, model := "", ""
-			if s.last != nil {
-				alias, model = s.last.Alias, s.last.Model
-			}
-			fmt.Fprintf(w, "%-15s %-7s %-5s %-8s %s\n", s.host, state, s.kind, model, alias)
-		}
 	})
 	return mux
 }
