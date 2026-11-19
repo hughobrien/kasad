@@ -80,6 +80,13 @@ includes it), and its card says "via ...". An unknown key or an unreadable file
 stops kasad at startup; names that match no device are logged as a warning
 after two minutes. Without the flag the page is one ungrouped grid.
 
+### Firewall
+
+Discovery replies arrive from UDP source ports 9999 and 20002, which a
+connection-tracking firewall treats as unsolicited and drops. On such a host
+allow them in, for example with nftables `udp sport { 9999, 20002 } accept` on
+the LAN interface. The module's `openFirewall` only opens the page's TCP port.
+
 ## Running
 
 ```

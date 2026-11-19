@@ -159,6 +159,16 @@ in {
       '';
     };
 
+    openFirewall = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Open the TCP port of `listen` in the firewall, for the page and
+        /metrics. Discovery replies come back from UDP 9999 and 20002 and may
+        need their own rule on a strict firewall (see the README).
+      '';
+    };
+
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -205,6 +215,9 @@ in {
         SystemCallFilter = [ "@system-service" "~@privileged" ];
       };
     };
+
+    networking.firewall.allowedTCPPorts = lib.optional cfg.openFirewall
+      (lib.toInt (lib.last (lib.splitString ":" cfg.listen)));
 
     # Auto-wire a Prometheus scrape job when both services are enabled.
     services.prometheus.scrapeConfigs = lib.mkIf

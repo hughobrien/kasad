@@ -86,17 +86,28 @@
       formatter = pkgs.nixpkgs-fmt;
     });
 
-    moduleCheck = (nixpkgs.lib.nixosSystem {
+    moduleSystem = nixpkgs.lib.nixosSystem {
       system = "x86_64-linux";
       modules = [
         self.nixosModules.default
         {
           boot.isContainer = true;
           system.stateVersion = "26.05";
-          services.kasad.enable = true;
+          services.kasad = {
+            enable = true;
+            openFirewall = true;
+            rooms = [{ name = "Kitchen"; devices = [ "Kettle" ]; }];
+            downstream = { "Speakers" = "Desk"; };
+          };
         }
       ];
-    }).config.systemd.units."kasad.service".unit;
+    };
+    # Evaluation fails (so the check does) if the options stop doing their job.
+    moduleCheck =
+      let c = moduleSystem.config; in
+      assert builtins.elem 9881 c.networking.firewall.allowedTCPPorts;
+      assert nixpkgs.lib.hasInfix "--metadata" c.systemd.services.kasad.serviceConfig.ExecStart;
+      c.systemd.units."kasad.service".unit;
 
     defaultModule = { pkgs, lib, ... }: {
       imports = [ ./nix/module.nix ];
