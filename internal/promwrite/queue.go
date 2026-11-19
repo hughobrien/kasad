@@ -153,7 +153,8 @@ func (q *Queue) Flush(ctx context.Context) error {
 
 // FromFamilies turns gathered gauges, counters and untyped metrics into
 // series with one sample at t. keep (nil keeps all) sees each metric's labels;
-// extra labels are added to every series.
+// extra labels are added to every series. pushed_<target> labels, which mark
+// scraped copies (see Target.Label), are left off.
 func FromFamilies(fams []*dto.MetricFamily, t time.Time, keep func(labels map[string]string) bool, extra map[string]string) []Series {
 	var out []Series
 	for _, f := range fams {
@@ -171,7 +172,9 @@ func FromFamilies(fams []*dto.MetricFamily, t time.Time, keep func(labels map[st
 			}
 			labels := map[string]string{}
 			for _, l := range m.GetLabel() {
-				labels[l.GetName()] = l.GetValue()
+				if !strings.HasPrefix(l.GetName(), "pushed_") {
+					labels[l.GetName()] = l.GetValue()
+				}
 			}
 			if keep != nil && !keep(labels) {
 				continue

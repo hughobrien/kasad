@@ -74,7 +74,7 @@ func TestQueueMergesAndRetries(t *testing.T) {
 
 func TestFromFamilies(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "room_celsius"}, []string{"unit"})
+	g := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "room_celsius", ConstLabels: Targets{{"vm", "http://vm"}}.Labels()}, []string{"unit"})
 	h := prometheus.NewHistogram(prometheus.HistogramOpts{Name: "latency_seconds"})
 	reg.MustRegister(g, h)
 	g.WithLabelValues("office").Set(21.5)
@@ -89,7 +89,7 @@ func TestFromFamilies(t *testing.T) {
 		t.Fatalf("want only office's gauge (no histogram), got %v", s)
 	}
 	l := s[0].Labels
-	if l["__name__"] != "room_celsius" || l["unit"] != "office" || l["job"] != "comfortd" || s[0].Samples[0] != (Sample{at(7), 21.5}) {
+	if l["__name__"] != "room_celsius" || l["unit"] != "office" || l["job"] != "comfortd" || len(l) != 3 || s[0].Samples[0] != (Sample{at(7), 21.5}) {
 		t.Errorf("got %v", s[0])
 	}
 }
