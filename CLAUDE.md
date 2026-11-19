@@ -7,7 +7,7 @@ Prometheus exporter for TP-Link Kasa plugs and switches, running on bigthink (Hu
 - **This repo is public.** No device names, IPs, MACs, serials, account details or screenshots in commits. Test fixtures are invented. `IMG_*.PNG` are Hugh's app screenshots, gitignored.
 - **The TP-Link login** is the two-line file `/tmp/kasa` on the Mac (email, password) and `/persist/kasad/credentials` on bigthink. Never print, log or commit it.
 - **No command reaches a real device unless Hugh agreed to that specific change in this conversation.** Polling is read-only. Tests use the fakes in `internal/kasa/kasa_test.go`.
-- No third-party dependencies unless Hugh agrees: standard library only, so `vendorHash = null`.
+- Dependencies: only `prometheus/client_golang`, matching comfortd and breezyd. Ask before adding more. After a go.mod change, recompute `vendorHash` (set `pkgs.lib.fakeHash`, build on bigthink, paste the `got:` hash).
 
 ## Layout
 

@@ -17,8 +17,9 @@
         pname = "kasad";
         inherit version;
         src = ./.;
-        # Standard library only: no vendor directory to hash.
-        vendorHash = null;
+        # When go.mod/go.sum change, set this to pkgs.lib.fakeHash, build, and
+        # paste the `got:` hash.
+        vendorHash = "sha256-MP1q99k5Vpi89ZYgDxcxzeL6KvOyNsIdwA7GEHgsGYA=";
         subPackages = [ "cmd/kasad" ];
         ldflags = [ "-s" "-w" "-X main.version=${version}" ];
         doCheck = true;

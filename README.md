@@ -2,7 +2,7 @@
 
 A Prometheus exporter for TP-Link Kasa smart plugs and switches. It finds
 devices on the LAN by itself, polls them in the background and serves the
-latest readings at `/metrics`. Standard library only, no dependencies.
+latest readings at `/metrics`. Go, with `prometheus/client_golang` like comfortd and breezyd.
 
 ## What it reads
 
