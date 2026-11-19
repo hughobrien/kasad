@@ -1,0 +1,28 @@
+:root { --bg:#f6f6f6; --card:#fff; --fg:#111; --weak:#777; --border:#ddd; --hl:#fff3b0; --err:#c00; --on:#276; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#161616; --card:#1f1f1f; --fg:#e8e8e8; --weak:#999; --border:#333; --hl:#4a4000; --err:#f66; --on:#3a8; }
+}
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header { display:flex; flex-wrap:wrap; align-items:baseline; gap:.25rem 1.5rem; padding:.5rem 1rem; border-bottom:1px solid var(--border); }
+h1 { margin:0; font-size:1.1rem; }
+h2 { margin:0; font-size:1rem; overflow-wrap:anywhere; }
+.summary { margin:0; color:var(--weak); }
+.summary b { color:var(--fg); font-size:1.1rem; margin-right:.6rem; font-variant-numeric:tabular-nums; }
+#devices { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(15rem,100%), 1fr)); gap:1rem; padding:1rem; align-items:start; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:6px; padding:.6rem .8rem; }
+.card.offline { opacity:.6; }
+.card .head { display:flex; gap:.5rem; justify-content:space-between; align-items:center; }
+.card .sub { color:var(--weak); margin-bottom:.4rem; }
+.card dl { display:grid; grid-template-columns:max-content 1fr; gap:0 1rem; margin:.4rem 0 0; font-variant-numeric:tabular-nums; }
+.card dt { color:var(--weak); }
+.card dd { margin:0; text-align:right; }
+.card dd.watts { font-size:1.2rem; font-weight:600; }
+.offline-note { color:var(--weak); margin:.4rem 0 0; }
+.ctl-error { color:var(--err); margin:.4rem 0 0; }
+.power-toggle { font:inherit; font-size:.85rem; min-width:3.5rem; padding:.3rem .6rem; border:1px solid var(--border); border-radius:4px; background:transparent; color:var(--fg); cursor:pointer; }
+.power-toggle:hover:not([aria-pressed="true"]):not(:disabled) { background:var(--hl); }
+.power-toggle[aria-pressed="true"] { background:var(--on); color:#fff; border-color:var(--on); }
+.power-toggle:focus-visible { outline:2px solid var(--on); outline-offset:1px; }
+.power-toggle:disabled { cursor:default; opacity:.5; }
+.power-toggle.pending { outline:2px dashed var(--weak); outline-offset:1px; }

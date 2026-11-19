@@ -1,0 +1,60 @@
+package templates
+
+import (
+	"strconv"
+
+	"github.com/hughobrien/kasad/internal/web/ui"
+)
+
+templ Card(c ui.CardView) {
+	<section id={ c.ID } class={ "card", templ.KV("offline", !c.Up) }>
+		<div class="head">
+			<h2>{ c.Name }</h2>
+			@powerToggle(c)
+		</div>
+		<div class="sub">{ c.Model }</div>
+		if !c.Up {
+			<p class="offline-note">Offline · last seen { c.LastSeen }</p>
+		} else {
+			<dl>
+				if c.Power != "" {
+					<dt>Power</dt>
+					<dd class="watts">{ c.Power }</dd>
+				}
+				if c.Today != "" {
+					<dt>Today</dt>
+					<dd>{ c.Today }</dd>
+				}
+				if c.Month != "" {
+					<dt>This month</dt>
+					<dd>{ c.Month }</dd>
+				}
+				if c.RSSI != "" {
+					<dt>Signal</dt>
+					<dd>{ c.RSSI }</dd>
+				}
+			</dl>
+		}
+		if c.Err != "" {
+			<p class="ctl-error" role="alert">{ c.Err }</p>
+		}
+	</section>
+}
+
+// powerToggle asks for the opposite of the state the device last reported.
+// The card is replaced by the next SSE patch, which drops the pending class.
+templ powerToggle(c ui.CardView) {
+	<button
+		type="button"
+		class="power-toggle"
+		aria-pressed={ strconv.FormatBool(c.On) }
+		disabled?={ !c.Up || !c.HasState }
+		data-on:click={ "el.classList.add('pending'); @post('/ui/devices/" + c.Host + "/relay?on=" + strconv.FormatBool(!c.On) + "')" }
+	>
+		if c.On {
+			On
+		} else {
+			Off
+		}
+	</button>
+}

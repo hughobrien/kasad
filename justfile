@@ -11,3 +11,6 @@ build:
 gate:
     rsync -a --delete --exclude .git ./ bigthink:~/kasad-gate/
     ssh bigthink 'mkdir -p /tmp/kgate && cd ~/kasad-gate && TMPDIR=/tmp/kgate nix build --no-write-lock-file -L "path:$PWD#checks.x86_64-linux.gate" > /tmp/kgate.log 2>&1; echo "NIX EXIT=$?"; tail -30 /tmp/kgate.log'
+
+generate:
+    go run github.com/a-h/templ/cmd/templ@v0.3.1118 generate
