@@ -388,3 +388,41 @@ func TestKLAPPollEnergy(t *testing.T) {
 		t.Fatalf("today=%v month=%v", r.EnergyTodayWh, r.EnergyMonthWh)
 	}
 }
+
+func TestOffRelayMeansZeroPowerAndCurrent(t *testing.T) {
+	// A plug's meter lags the relay for a moment after switching off; with the
+	// relay open the draw is 0 by definition, so do not report the stale figure.
+	off := strings.Replace(kp125Reply, `"relay_state":1`, `"relay_state":0`, 1)
+	r, err := parseLegacy([]byte(off), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *r.PowerWatts != 0 || *r.CurrentAmps != 0 {
+		t.Fatalf("off: power %v current %v, want 0", *r.PowerWatts, *r.CurrentAmps)
+	}
+	if *r.VoltageVolts != 122.598 {
+		t.Fatalf("mains voltage is still there with the relay open: %v", *r.VoltageVolts)
+	}
+	on, _ := parseLegacy([]byte(kp125Reply), testNow)
+	if *on.PowerWatts != 5.535 {
+		t.Fatalf("on must be untouched: %v", *on.PowerWatts)
+	}
+}
+
+func TestKLAPOffRelayMeansZeroPower(t *testing.T) {
+	creds := Credentials{Username: "a", Password: "b"}
+	srv, _ := fakeKLAP(t, creds, map[string]any{
+		"get_device_info": map[string]any{"model": "EP25", "device_on": false},
+		"get_emeter_data": map[string]any{"power_mw": 3225, "current_ma": 60, "voltage_mv": 122000},
+	})
+	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), creds)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	r, err := k.Poll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *r.PowerWatts != 0 || *r.CurrentAmps != 0 {
+		t.Fatalf("off: power %v current %v", *r.PowerWatts, *r.CurrentAmps)
+	}
+}

@@ -105,7 +105,7 @@ func (k *KLAP) Poll(ctx context.Context) (*Reading, error) {
 	} else if _, ok := err.(*SmartError); !ok {
 		return nil, err
 	}
-	return out, nil
+	return out.settle(), nil
 }
 
 // SetDeviceOn switches the device on or off (it does not toggle).

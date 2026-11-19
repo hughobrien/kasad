@@ -23,3 +23,20 @@ type Reading struct {
 	EnergyTodayWh *float64
 	EnergyMonthWh *float64
 }
+
+// settle applies what is true by definition: with the relay open nothing is
+// drawn. A plug's meter lags the relay for a moment after switching off, and a
+// stale figure there would be presented as current.
+func (r *Reading) settle() *Reading {
+	if r.HasState && !r.On {
+		zero := func(v **float64) {
+			if *v != nil {
+				z := 0.0
+				*v = &z
+			}
+		}
+		zero(&r.PowerWatts)
+		zero(&r.CurrentAmps)
+	}
+	return r
+}

@@ -224,7 +224,7 @@ func parseLegacy(raw []byte, now time.Time) (*Reading, error) {
 		}
 		out.EnergyMonthWh = &v
 	}
-	return out, nil
+	return out.settle(), nil
 }
 
 func scale(v *float64, f float64) *float64 {
