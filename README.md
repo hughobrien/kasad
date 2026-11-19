@@ -6,6 +6,16 @@ serves the latest readings at `/metrics`, and shows them on a web page where
 each one can be switched on and off. Go, with `prometheus/client_golang`,
 templ and datastar like comfortd and breezyd.
 
+## Screenshots
+
+The control page (device names replaced with generic ones):
+
+![kasad control page: cards grouped by room, each with a switch, power, energy and signal; a dimmer has a brightness slider](docs/screenshots/ui.png)
+
+A Grafana dashboard built on the metrics (device names blacked out):
+
+![Grafana dashboard: total draw, energy, devices answering, mains voltage, power and energy per plug, and on/off timelines](docs/screenshots/grafana.png)
+
 ## What it reads
 
 | Devices | Protocol | Needs a TP-Link login | Metrics |

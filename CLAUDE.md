@@ -4,7 +4,7 @@ Prometheus exporter and control page for TP-Link Kasa plugs and switches, runnin
 
 ## Hard rules
 
-- **This repo is public.** No device names, IPs, MACs, serials, account details or screenshots in commits. Test fixtures are invented.
+- **This repo is public.** No device names, IPs, MACs, serials or account details in commits. Test fixtures are invented. The only screenshots are in `docs/screenshots/`, with every device name replaced or blacked out; check any new one for names, room names and IPs before committing.
 - **The TP-Link login** is the two-line file `/tmp/kasa` on the Mac (email, password) and `/persist/kasad/credentials` on bigthink. Never print, log or commit it.
 - **No command reaches a real device unless Hugh agreed to that specific change in this conversation.** Polling is read-only; the UI's switch is a write. Tests use the fakes in `internal/kasa/kasa_test.go` and the stubs in `internal/exporter` and `internal/web`.
 - Dependencies: `prometheus/client_golang`, `a-h/templ` (0.3.1118, via `templOverlay` in `flake.nix`, which throws once nixpkgs catches up) and `starfederation/datastar-go`, all matching comfortd and breezyd, plus the vendored datastar JS (`internal/web/vendor`). Ask before adding more. After a go.mod change, recompute `vendorHash` (set `pkgs.lib.fakeHash`, build on bigthink, paste the `got:` hash).
