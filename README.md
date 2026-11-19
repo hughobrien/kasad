@@ -36,7 +36,7 @@ goes to 0 and `kasa_last_success_timestamp_seconds` says when it last worked.
 
 `/` is a page with a card per device: on/off switch, current power in W,
 energy today and this month in kWh (as recorded by the device itself), and
-Wi-Fi signal. The header shows the combined draw and how many devices answer.
+Wi-Fi signal. Dimmers also have an editable brightness percentage. The second line of each card says what the device is (Socket, Light Switch, Light Switch (Dimmable)), and all cards are the same size. The header shows the combined draw and how many devices answer.
 It updates live (server-sent events), including changes made from the Kasa app
 or a wall switch. A switch sends the state it wants, never a toggle, and the
 card then shows what the device reports. Offline devices are dimmed and their
@@ -52,6 +52,7 @@ it.
 | `GET /` | the page |
 | `GET /ui/sse` | live updates |
 | `POST /ui/devices/{host}/relay?on=true\|false` | switch a device |
+| `POST /ui/devices/{host}/brightness?pct=1..100` | set a dimmer's brightness (does not switch it on) |
 | `GET /metrics`, `GET /healthz` | Prometheus, liveness |
 
 ## Running
