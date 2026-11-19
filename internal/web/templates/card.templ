@@ -12,7 +12,12 @@ templ Card(c ui.CardView) {
 			<h2>{ c.Name }</h2>
 			@powerToggle(c)
 		</div>
-		<div class="sub">{ c.Kind }</div>
+		<div class="sub">
+			{ c.Kind }
+			if c.Via != "" {
+				<span class="via">· via { c.Via }</span>
+			}
+		</div>
 		if c.Dimmable && c.Up && c.Brightness > 0 {
 			<label class="dim">
 				Brightness

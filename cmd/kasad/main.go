@@ -22,6 +22,7 @@ import (
 	"github.com/hughobrien/kasad/internal/kasa"
 	"github.com/hughobrien/kasad/internal/web"
 	"github.com/hughobrien/kasad/internal/web/templates"
+	"github.com/hughobrien/kasad/internal/web/ui"
 )
 
 var version = "dev"
@@ -53,6 +54,7 @@ func run() error {
 		discover  = flag.Duration("discover-interval", time.Minute, "how often to broadcast for new devices")
 		expire    = flag.Duration("expire", 10*time.Minute, "drop a discovered device after this long unseen")
 		pollTO    = flag.Duration("poll-timeout", 5*time.Second, "timeout for one poll attempt")
+		metaPath  = flag.String("metadata", "", "JSON file naming rooms and devices plugged into other devices (see README); optional")
 		showVer   = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -85,8 +87,24 @@ func run() error {
 	defer stop()
 	go e.Run(ctx)
 
+	var meta *ui.Meta
+	if *metaPath != "" {
+		m, err := ui.LoadMeta(*metaPath)
+		if err != nil {
+			return err
+		}
+		meta = m
+		// Devices take a few discovery rounds to appear; after that, a name in
+		// the file that matches nothing is a rename or a typo worth saying so.
+		time.AfterFunc(2*time.Minute, func() {
+			if names := m.Unmatched(e.Devices()); len(names) > 0 {
+				log.Warn("metadata names match no device", "names", names)
+			}
+		})
+	}
+
 	templates.BuildID = buildID()
-	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version)), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

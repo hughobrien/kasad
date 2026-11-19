@@ -28,7 +28,7 @@ templ Page(p ui.PageView) {
 				<h1>kasad</h1>
 				@Summary(p)
 			</header>
-			@Devices(p.Cards)
+			@Devices(p.Sections)
 		</body>
 	</html>
 }
@@ -41,12 +41,22 @@ templ Summary(p ui.PageView) {
 	</p>
 }
 
-// Devices is the card grid. It is always rendered whole (never empty), so
-// the event stream can replace it when devices come and go.
-templ Devices(cs []ui.CardView) {
+// Devices is every card, in titled sections (one unnamed section when rooms
+// are not configured). It is always rendered whole (never empty), so the event
+// stream can replace it when devices come and go.
+templ Devices(ss []ui.Section) {
 	<main id="devices">
-		for _, c := range cs {
-			@Card(c)
+		for _, s := range ss {
+			<div class="room">
+				if s.Name != "" {
+					<h2 class="room-title">{ s.Name }</h2>
+				}
+				<div class="grid">
+					for _, c := range s.Cards {
+						@Card(c)
+					}
+				</div>
+			</div>
 		}
 	</main>
 }

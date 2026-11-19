@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hughobrien/kasad/internal/web/templates"
+	"github.com/hughobrien/kasad/internal/web/ui"
 )
 
 type sseEvent struct{ data string }
@@ -189,5 +190,50 @@ func TestSSEUnsubscribesOnClose(t *testing.T) {
 	}
 	if f.unsubscribed.Load() != 1 {
 		t.Fatalf("unsubscribed %d times, want 1", f.unsubscribed.Load())
+	}
+}
+
+func TestSSERoomChangeResendsList(t *testing.T) {
+	m := &ui.Meta{Rooms: []ui.Room{{Name: "A", Devices: []string{"Lamp"}}, {Name: "B", Devices: []string{"Fan"}}}}
+	f := newFake(dev("10.0.0.1", "Lamp", 5), dev("10.0.0.2", "Fan", 9))
+	srv := httptest.NewServer(newHandlerMeta(f, m))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/ui/sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	seen := make(chan string, 64)
+	go func() {
+		for sc.Scan() {
+			seen <- sc.Text()
+		}
+		close(seen)
+	}()
+	waitFor := func(sub string) bool {
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case l, ok := <-seen:
+				if !ok {
+					return false
+				}
+				if strings.Contains(l, sub) {
+					return true
+				}
+			case <-deadline:
+				return false
+			}
+		}
+	}
+	if !waitFor("location.reload") {
+		t.Fatal("no opening burst")
+	}
+	// Fan's name changes, so it falls out of room B into Other: the whole grid must be resent.
+	f.change(dev("10.0.0.1", "Lamp", 5), dev("10.0.0.2", "Renamed", 9))
+	if !waitFor("Other") {
+		t.Fatal("regrouping did not resend the list")
 	}
 }

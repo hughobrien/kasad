@@ -55,6 +55,31 @@ it.
 | `POST /ui/devices/{host}/brightness?pct=1..100` | set a dimmer's brightness (does not switch it on) |
 | `GET /metrics`, `GET /healthz` | Prometheus, liveness |
 
+### Rooms and downstream devices
+
+Devices do not know their room or what is plugged into what, so that is
+configuration: `--metadata file.json`, or the module's `rooms` and
+`downstream` options.
+
+```json
+{
+  "rooms": [
+    {"name": "Kitchen", "devices": ["Kettle", "Fridge"]},
+    {"name": "Study", "devices": ["Desk", "Speakers"]}
+  ],
+  "downstream": {"Speakers": "Desk"}
+}
+```
+
+Names are the device names from the Kasa app, matched case-insensitively.
+Rooms appear in the order listed; devices not listed go in a trailing "Other"
+section, and a device named in two rooms stays in the first. `downstream` marks
+a device plugged into another metered one: its power is left out of the
+header's combined total while the upstream device is up (that reading already
+includes it), and its card says "via ...". An unknown key or an unreadable file
+stops kasad at startup; names that match no device are logged as a warning
+after two minutes. Without the flag the page is one ungrouped grid.
+
 ## Running
 
 ```

@@ -6,12 +6,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/hughobrien/kasad/internal/web/ui"
 )
 
-func newHandler(f *fakeDevices) http.Handler {
+func newHandler(f *fakeDevices) http.Handler { return newHandlerMeta(f, nil) }
+
+func newHandlerMeta(f *fakeDevices, m *ui.Meta) http.Handler {
 	return Handler(f, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("metrics-here"))
-	}))
+	}), m)
 }
 
 func post(h http.Handler, target string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -186,5 +190,37 @@ func TestBrightnessErrorPatchesCard(t *testing.T) {
 	w := post(newHandler(f), "/ui/devices/10.0.0.5/brightness?pct=70", fromPage)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "boom") {
 		t.Fatalf("status %d:\n%s", w.Code, w.Body.String())
+	}
+}
+
+func TestIndexGroupsByRoomAndDedupesTotal(t *testing.T) {
+	m := &ui.Meta{
+		Rooms:      []ui.Room{{Name: "Study", Devices: []string{"Desk", "Sound"}}, {Name: "Hall", Devices: []string{"Lamp"}}},
+		Downstream: map[string]string{"Sound": "Desk"},
+	}
+	f := newFake(dev("10.0.0.1", "Desk", 40), dev("10.0.0.2", "Sound", 15), dev("10.0.0.3", "Lamp", 5), dev("10.0.0.4", "Stray", 1))
+	w := httptest.NewRecorder()
+	newHandlerMeta(f, m).ServeHTTP(w, httptest.NewRequest("GET", "/", nil))
+	body := w.Body.String()
+	order := []string{">Study<", ">Hall<", ">Other<"}
+	last := -1
+	for _, o := range order {
+		i := strings.Index(body, o)
+		if i < 0 || i < last {
+			t.Fatalf("section %s missing or out of order:\n%s", o, body)
+		}
+		last = i
+	}
+	if !strings.Contains(body, "46.0 W") || !strings.Contains(body, "via Desk") {
+		t.Fatalf("total should skip Sound (40+5+1) and Sound should say via Desk:\n%s", body)
+	}
+}
+
+func TestRelayResponseKeepsViaNote(t *testing.T) {
+	m := &ui.Meta{Downstream: map[string]string{"Sound": "Desk"}}
+	f := newFake(dev("10.0.0.1", "Desk", 40), dev("10.0.0.2", "Sound", 15))
+	w := post(newHandlerMeta(f, m), "/ui/devices/10.0.0.2/relay?on=false", fromPage)
+	if !strings.Contains(w.Body.String(), "via Desk") {
+		t.Fatalf("patched card lost its via note:\n%s", w.Body.String())
 	}
 }

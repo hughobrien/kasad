@@ -19,11 +19,18 @@ type CardView struct {
 	Brightness                          int // percent, 0 when unknown
 	Power, Today, Month, RSSI, LastSeen string
 	Err                                 string
+	Via                                 string // name of the device this one is plugged into, if configured
+}
+
+// Section is a titled group of cards. Name is empty when the page is not grouped.
+type Section struct {
+	Name  string
+	Cards []CardView
 }
 
 // PageView is the whole page.
 type PageView struct {
-	Cards          []CardView
+	Sections       []Section
 	TotalPower     string
 	UpCount, Total int
 }
@@ -63,21 +70,94 @@ func NewCard(d exporter.DeviceView, now time.Time) CardView {
 	return c
 }
 
-// NewPage builds the page. The total counts only devices that are up.
-func NewPage(ds []exporter.DeviceView, now time.Time) PageView {
+// NewPage builds the page. The total counts only devices that are up, and
+// leaves out a device whose power is already inside its upstream device's
+// reading (m.Downstream) while that upstream device is up.
+func NewPage(ds []exporter.DeviceView, now time.Time, m *Meta) PageView {
 	p := PageView{Total: len(ds)}
-	var total float64
+	byName := map[string]exporter.DeviceView{}
 	for _, d := range ds {
-		p.Cards = append(p.Cards, NewCard(d, now))
+		if k := nameKey(d); byName[k].Host == "" {
+			byName[k] = d
+		}
+	}
+	upstream := func(d exporter.DeviceView) (exporter.DeviceView, bool) {
+		if m == nil {
+			return exporter.DeviceView{}, false
+		}
+		name, ok := m.downstream()[nameKey(d)]
+		if !ok {
+			return exporter.DeviceView{}, false
+		}
+		u, ok := byName[name]
+		return u, ok && u.Host != d.Host
+	}
+
+	cards := make([]CardView, len(ds))
+	var total float64
+	for i, d := range ds {
+		cards[i] = NewCard(d, now)
+		u, has := upstream(d)
+		if has {
+			cards[i].Via = displayName(u)
+		}
 		if d.Up {
 			p.UpCount++
-			if d.PowerWatts != nil {
+			if d.PowerWatts != nil && !(has && u.Up) {
 				total += *d.PowerWatts
 			}
 		}
 	}
 	p.TotalPower = formatW(total)
+	p.Sections = group(ds, cards, m)
 	return p
+}
+
+func displayName(d exporter.DeviceView) string {
+	if d.Alias != "" {
+		return d.Alias
+	}
+	return d.Host
+}
+
+// nameKey is how configuration names match devices: case-insensitive.
+func nameKey(d exporter.DeviceView) string { return strings.ToLower(displayName(d)) }
+
+// group puts cards in rooms, in the configured order, with leftovers in a
+// trailing "Other". Without configuration there is one unnamed section.
+func group(ds []exporter.DeviceView, cards []CardView, m *Meta) []Section {
+	if m == nil || len(m.Rooms) == 0 {
+		return []Section{{Cards: cards}}
+	}
+	roomOf := map[string]int{} // first room that names a device wins
+	for i, r := range m.Rooms {
+		for _, n := range r.Devices {
+			if _, dup := roomOf[strings.ToLower(n)]; !dup {
+				roomOf[strings.ToLower(n)] = i
+			}
+		}
+	}
+	buckets := make([][]CardView, len(m.Rooms)+1) // last is Other
+	for i, d := range ds {
+		r, ok := roomOf[nameKey(d)]
+		if !ok {
+			r = len(m.Rooms)
+		}
+		buckets[r] = append(buckets[r], cards[i])
+	}
+	var out []Section
+	for i, r := range m.Rooms {
+		if len(buckets[i]) > 0 {
+			out = append(out, Section{Name: r.Name, Cards: buckets[i]})
+		}
+	}
+	if o := buckets[len(m.Rooms)]; len(o) > 0 {
+		out = append(out, Section{Name: "Other", Cards: o})
+	}
+	if len(out) == 0 {
+		out = []Section{{}}
+	}
+	return out
 }
 
 // safeID makes a host usable in an element id and a CSS selector.

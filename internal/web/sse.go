@@ -77,22 +77,29 @@ func (s *server) sse(w http.ResponseWriter, r *http.Request) {
 // came or went (or on the first call), otherwise only the cards whose
 // rendering changed, plus the summary line when it did.
 func (s *server) push(ctx context.Context, sse *datastar.ServerSentEventGenerator, st *stream) error {
-	page := ui.NewPage(s.d.Devices(), s.now())
+	page := ui.NewPage(s.d.Devices(), s.now(), s.meta)
 
-	ids := make([]string, len(page.Cards))
-	html := make(map[string]string, len(page.Cards))
-	for i, c := range page.Cards {
-		ids[i] = c.ID
-		html[c.ID] = renderString(ctx, templates.Card(c))
+	// ids carries the layout: a section marker before its cards, so a device
+	// moving between rooms (or a room appearing) changes the list.
+	var ids []string
+	var cards []ui.CardView
+	html := map[string]string{}
+	for _, sec := range page.Sections {
+		ids = append(ids, "§"+sec.Name)
+		for _, c := range sec.Cards {
+			ids = append(ids, c.ID)
+			cards = append(cards, c)
+			html[c.ID] = renderString(ctx, templates.Card(c))
+		}
 	}
 
 	if st.cards == nil || !slices.Equal(ids, st.ids) {
-		if err := sse.PatchElementTempl(templates.Devices(page.Cards),
+		if err := sse.PatchElementTempl(templates.Devices(page.Sections),
 			datastar.WithSelector("#devices"), datastar.WithModeOuter()); err != nil {
 			return err
 		}
 	} else {
-		for _, c := range page.Cards {
+		for _, c := range cards {
 			if html[c.ID] == st.cards[c.ID] {
 				continue
 			}

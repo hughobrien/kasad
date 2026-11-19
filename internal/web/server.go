@@ -26,14 +26,15 @@ type Devices interface {
 }
 
 type server struct {
-	d   Devices
-	now func() time.Time
+	d    Devices
+	meta *ui.Meta // nil: no rooms, no downstream links
+	now  func() time.Time
 }
 
 // Handler serves the page and its routes; every other path goes to rest
 // (the metrics handler).
-func Handler(d Devices, rest http.Handler) http.Handler {
-	s := &server{d: d, now: time.Now}
+func Handler(d Devices, rest http.Handler, meta *ui.Meta) http.Handler {
+	s := &server{d: d, meta: meta, now: time.Now}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /ui/sse", s.sse)
@@ -61,7 +62,7 @@ func serveAsset(file, ctype string) http.HandlerFunc {
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := templates.Page(ui.NewPage(s.d.Devices(), s.now())).Render(r.Context(), w); err != nil {
+	if err := templates.Page(ui.NewPage(s.d.Devices(), s.now(), s.meta)).Render(r.Context(), w); err != nil {
 		slog.Debug("render index", "err", err)
 	}
 }
@@ -110,9 +111,12 @@ func (s *server) relay(w http.ResponseWriter, r *http.Request) {
 // any): that also drops the click's pending style when nothing changed.
 func (s *server) patchCard(w http.ResponseWriter, r *http.Request, host string) {
 	sse := datastar.NewSSE(w, r)
-	if v, ok := s.find(host); ok {
-		c := ui.NewCard(v, s.now())
-		_ = sse.PatchElementTempl(templates.Card(c), datastar.WithSelectorf("#%s", c.ID), datastar.WithModeOuter())
+	for _, sec := range ui.NewPage(s.d.Devices(), s.now(), s.meta).Sections {
+		for _, c := range sec.Cards {
+			if c.Host == host {
+				_ = sse.PatchElementTempl(templates.Card(c), datastar.WithSelectorf("#%s", c.ID), datastar.WithModeOuter())
+			}
+		}
 	}
 }
 

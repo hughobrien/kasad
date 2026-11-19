@@ -91,7 +91,7 @@ func TestPageRendersEmptyAndWithCards(t *testing.T) {
 			t.Errorf("empty page missing %q:\n%s", want, h)
 		}
 	}
-	h = render(t, Page(ui.PageView{Cards: []ui.CardView{onCard()}, TotalPower: "5.6 W", UpCount: 1, Total: 1}))
+	h = render(t, Page(ui.PageView{Sections: []ui.Section{{Cards: []ui.CardView{onCard()}}}, TotalPower: "5.6 W", UpCount: 1, Total: 1}))
 	if !strings.Contains(h, "1 of 1 up") || !strings.Contains(h, "Lamp") {
 		t.Fatalf("page with a card:\n%s", h)
 	}
@@ -118,5 +118,20 @@ func TestCardDimmerFieldIdChangesWithBrightness(t *testing.T) {
 	ha, hb := render(t, Card(a)), render(t, Card(b))
 	if !strings.Contains(ha, `id="bright-device-10-0-0-1-40"`) || !strings.Contains(hb, `id="bright-device-10-0-0-1-41"`) {
 		t.Fatalf("field ids must carry the stored value:\n%s", ha)
+	}
+}
+
+func TestPageSectionTitlesAndViaNote(t *testing.T) {
+	via := onCard()
+	via.Via = "Desk"
+	h := render(t, Page(ui.PageView{Sections: []ui.Section{
+		{Name: "Study", Cards: []ui.CardView{via}},
+		{Cards: []ui.CardView{onCard()}},
+	}}))
+	if !strings.Contains(h, `<h2 class="room-title">Study</h2>`) || !strings.Contains(h, "via Desk") {
+		t.Fatalf("%s", h)
+	}
+	if strings.Count(h, `class="room-title"`) != 1 {
+		t.Fatal("an unnamed section gets no heading")
 	}
 }

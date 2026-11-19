@@ -65,11 +65,11 @@ func TestNewPageTotals(t *testing.T) {
 		{Host: "10.0.0.2", Up: true, PowerWatts: f(300)},
 		{Host: "10.0.0.3", Up: true},                      // unmetered
 		{Host: "10.0.0.4", Up: false, PowerWatts: f(999)}, // down: not counted
-	}, now)
-	if p.TotalPower != "305.5 W" || p.UpCount != 3 || p.Total != 4 || len(p.Cards) != 4 {
+	}, now, nil)
+	if p.TotalPower != "305.5 W" || p.UpCount != 3 || p.Total != 4 || len(p.Sections[0].Cards) != 4 {
 		t.Fatalf("page = %+v", p)
 	}
-	if e := NewPage(nil, now); e.TotalPower != "0.0 W" || e.UpCount != 0 || e.Total != 0 {
+	if e := NewPage(nil, now, nil); e.TotalPower != "0.0 W" || e.UpCount != 0 || e.Total != 0 {
 		t.Fatalf("empty page = %+v", e)
 	}
 }

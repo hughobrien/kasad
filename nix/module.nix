@@ -17,6 +17,10 @@
 let
   cfg = config.services.kasad;
 
+  metadata = pkgs.writeText "kasad-metadata.json" (builtins.toJSON {
+    inherit (cfg) rooms downstream;
+  });
+
   # Generic systemd sandboxing, nothing specific to kasad.
   sandbox = {
     NoNewPrivileges = true;
@@ -122,6 +126,39 @@ in {
       };
     };
 
+    rooms = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          name = lib.mkOption {
+            type = lib.types.str;
+            description = "Title of the section on the page.";
+          };
+          devices = lib.mkOption {
+            type = lib.types.listOf lib.types.str;
+            description = "Device names (as set in the Kasa app; case does not matter).";
+          };
+        };
+      });
+      default = [ ];
+      example = [{ name = "Kitchen"; devices = [ "Kettle" "Fridge" ]; }];
+      description = ''
+        Group the cards on the page into rooms, in this order. Devices not
+        listed go in a trailing "Other" section. Devices do not know their
+        room, so this is configuration.
+      '';
+    };
+
+    downstream = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = { "Speakers" = "Desk"; };
+      description = ''
+        Devices plugged into another metered device, as `name = "upstream name"`.
+        The page's combined power skips such a device while its upstream device
+        is up, because the upstream reading already includes it.
+      '';
+    };
+
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
@@ -155,6 +192,8 @@ in {
           "--hosts" (lib.escapeShellArg (lib.concatStringsSep "," cfg.hosts))
         ] ++ lib.optionals (cfg.credentialsFile != null) [
           "--credentials" "%d/credentials"
+        ] ++ lib.optionals (cfg.rooms != [ ] || cfg.downstream != { }) [
+          "--metadata" "${metadata}"
         ] ++ map lib.escapeShellArg cfg.extraArgs);
         LoadCredential = lib.optional (cfg.credentialsFile != null)
           "credentials:${cfg.credentialsFile}";
