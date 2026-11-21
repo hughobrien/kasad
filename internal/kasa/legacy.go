@@ -76,9 +76,9 @@ func legacyQuery(ctx context.Context, host string, req []byte) ([]byte, error) {
 }
 
 // legacyPollRequest asks for the sysinfo, the live reading and the device's
-// own day and month energy records, all in one round trip.
+// own day and month energy records and its own date, all in one round trip.
 func legacyPollRequest(now time.Time) []byte {
-	return []byte(fmt.Sprintf(`{"system":{"get_sysinfo":{}},"emeter":{"get_realtime":{},"get_daystat":{"month":%d,"year":%d},"get_monthstat":{"year":%d}}}`,
+	return []byte(fmt.Sprintf(`{"system":{"get_sysinfo":{}},"time":{"get_time":{}},"emeter":{"get_realtime":{},"get_daystat":{"month":%d,"year":%d},"get_monthstat":{"year":%d}}}`,
 		int(now.Month()), now.Year(), now.Year()))
 }
 
@@ -199,13 +199,23 @@ func parseLegacy(raw []byte, now time.Time) (*Reading, error) {
 		System struct {
 			Sysinfo *legacySysinfo `json:"get_sysinfo"`
 		} `json:"system"`
+		Time struct {
+			Get *struct {
+				ErrCode int `json:"err_code"`
+				Year    int `json:"year"`
+				Month   int `json:"month"`
+				MDay    int `json:"mday"`
+			} `json:"get_time"`
+		} `json:"time"`
 		Emeter struct {
 			Realtime *legacyRealtime `json:"get_realtime"`
 			Daystat  *struct {
-				List []legacyStat `json:"day_list"`
+				ErrCode int          `json:"err_code"`
+				List    []legacyStat `json:"day_list"`
 			} `json:"get_daystat"`
 			Monthstat *struct {
-				List []legacyStat `json:"month_list"`
+				ErrCode int          `json:"err_code"`
+				List    []legacyStat `json:"month_list"`
 			} `json:"get_monthstat"`
 		} `json:"emeter"`
 	}
@@ -233,27 +243,39 @@ func parseLegacy(raw []byte, now time.Time) (*Reading, error) {
 		out.CurrentAmps = pick(scale(rt.CurrentMA, 1e-3), rt.Current)
 		out.EnergyWh = pick(rt.TotalWh, scale(rt.Total, 1000))
 	}
-	// A device that answered the stats but has no entry for today (or this
-	// month) has recorded nothing yet, which is 0, not "unknown".
-	if ds := r.Emeter.Daystat; ds != nil {
-		v := 0.0
-		for _, e := range ds.List {
-			if e.Year == now.Year() && e.Month == int(now.Month()) && e.Day == now.Day() {
-				v = e.wh()
-			}
-		}
-		out.EnergyTodayWh = &v
+	// The device keeps its own clock and zone, so "today" is its date when
+	// it told us (a missing or refused get_time falls back to the server's).
+	// A refused stats call is unknown, not 0.
+	ref := now
+	if t := r.Time.Get; t != nil && t.ErrCode == 0 && t.Year > 0 && t.Month > 0 && t.MDay > 0 {
+		ref = time.Date(t.Year, time.Month(t.Month), t.MDay, 0, 0, 0, 0, time.UTC)
 	}
-	if ms := r.Emeter.Monthstat; ms != nil {
-		v := 0.0
-		for _, e := range ms.List {
-			if e.Year == now.Year() && e.Month == int(now.Month()) {
-				v = e.wh()
-			}
-		}
-		out.EnergyMonthWh = &v
+	if ds := r.Emeter.Daystat; ds != nil && ds.ErrCode == 0 {
+		out.EnergyTodayWh = pickStat(ds.List, ref, now, false)
+	}
+	if ms := r.Emeter.Monthstat; ms != nil && ms.ErrCode == 0 {
+		out.EnergyMonthWh = pickStat(ms.List, ref, now, true)
 	}
 	return out.settle(), nil
+}
+
+// pickStat returns the Wh of the entry for ref's day (or month). With no
+// such entry the device has recorded nothing yet, which is 0, but only if
+// the list is for the period the device is in: the request was built from
+// req's month (year), and if ref is in another one the list is for the wrong
+// period and the answer is unknown (nil).
+func pickStat(list []legacyStat, ref, req time.Time, monthly bool) *float64 {
+	for _, e := range list {
+		if e.Year == ref.Year() && e.Month == int(ref.Month()) && (monthly || e.Day == ref.Day()) {
+			v := e.wh()
+			return &v
+		}
+	}
+	if ref.Year() != req.Year() || (!monthly && ref.Month() != req.Month()) {
+		return nil
+	}
+	v := 0.0
+	return &v
 }
 
 func scale(v *float64, f float64) *float64 {

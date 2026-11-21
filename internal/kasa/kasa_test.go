@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -339,6 +340,9 @@ func TestLegacyPollRequestAsksForStats(t *testing.T) {
 	if req.Emeter["get_daystat"]["year"] != 2026 || req.Emeter["get_daystat"]["month"] != 11 || req.Emeter["get_monthstat"]["year"] != 2026 {
 		t.Fatalf("request = %s", legacyPollRequest(testNow))
 	}
+	if !strings.Contains(string(legacyPollRequest(testNow)), `"time":{"get_time":{}}`) {
+		t.Fatalf("device time not asked for: %s", legacyPollRequest(testNow))
+	}
 	if _, ok := req.Emeter["get_realtime"]; !ok {
 		t.Fatal("realtime reading dropped")
 	}
@@ -356,12 +360,6 @@ func TestParseLegacyDayMonth(t *testing.T) {
 	}
 	if r.EnergyTodayWh == nil || *r.EnergyTodayWh != 3 || r.EnergyMonthWh == nil || *r.EnergyMonthWh != 1185 {
 		t.Fatalf("today=%v month=%v", r.EnergyTodayWh, r.EnergyMonthWh)
-	}
-
-	// No entry for today yet: the device has recorded nothing, which is 0.
-	r, _ = parseLegacy([]byte(statsReply), testNow.AddDate(0, 0, 1))
-	if r.EnergyTodayWh == nil || *r.EnergyTodayWh != 0 {
-		t.Fatalf("today without an entry = %v, want 0", r.EnergyTodayWh)
 	}
 
 	// A device that does not answer the stats has neither.
@@ -463,4 +461,85 @@ func TestSetLegacyBrightnessErrors(t *testing.T) {
 			t.Errorf("%d%% must be refused before it reaches the device", bad)
 		}
 	}
+}
+
+func TestParseLegacyStatPicking(t *testing.T) {
+	day := func(d, wh int) string {
+		return fmt.Sprintf(`{"year":2026,"month":11,"day":%d,"energy_wh":%d}`, d, wh)
+	}
+	mon := func(m, wh int) string {
+		return fmt.Sprintf(`{"year":2026,"month":%d,"energy_wh":%d}`, m, wh)
+	}
+	reply := func(devTime, daystat, monthstat string) []byte {
+		tm := ""
+		if devTime != "" {
+			tm = `"time":{"get_time":` + devTime + `},`
+		}
+		return []byte(`{"system":{"get_sysinfo":{"alias":"Lamp","model":"KP125(US)","relay_state":1}},` + tm + `
+"emeter":{"get_realtime":{"power_mw":5000},"get_daystat":` + daystat + `,"get_monthstat":` + monthstat + `}}`)
+	}
+	at := func(y, m, d int) string {
+		return fmt.Sprintf(`{"err_code":0,"year":%d,"month":%d,"mday":%d,"hour":0}`, y, m, d)
+	}
+	ok := `{"err_code":0,"day_list":[` + day(18, 56) + `,` + day(19, 3) + `]}`
+	okm := `{"err_code":0,"month_list":[` + mon(10, 1410) + `,` + mon(11, 1185) + `]}`
+	none, nonem := `{"err_code":0,"day_list":[]}`, `{"err_code":0,"month_list":[]}`
+	server := func(m, d, h int) time.Time { return time.Date(2026, time.Month(m), d, h, 0, 0, 0, time.UTC) }
+	tests := []struct {
+		name                 string
+		devTime, daystat, ms string
+		now                  time.Time
+		today, month         *float64
+	}{
+		// Without get_time the server's date is the reference.
+		{"exact match", "", ok, okm, testNow, f64(3), f64(1185)},
+		{"no device time, no entry for today yet", "", ok, okm, server(11, 20, 12), f64(0), f64(1185)},
+		{"empty lists", "", none, nonem, testNow, f64(0), f64(0)},
+		// With it, the device's date is.
+		{"device time agrees", at(2026, 11, 19), ok, okm, testNow, f64(3), f64(1185)},
+		{"idle device, correct clock, nothing yet today", at(2026, 11, 20), ok, okm, server(11, 20, 12), f64(0), f64(1185)},
+		{"device a day behind across midnight", at(2026, 11, 19), ok, okm, server(11, 20, 0), f64(3), f64(1185)},
+		{"device a day ahead across midnight", at(2026, 11, 19), ok, okm, server(11, 18, 23), f64(3), f64(1185)},
+		// The device is still in the previous month: the day list the server
+		// asked for (December, here empty) is not its month, so today is
+		// unknown; the month figure is still its November entry.
+		{"device in previous month", at(2026, 11, 30), none, okm, server(12, 1, 0), nil, f64(1185)},
+		// Different year: both lists are for the wrong period.
+		{"device in previous year", at(2026, 12, 31), none, nonem, time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), nil, nil},
+		{"device clock weeks behind", at(2026, 10, 5), ok, okm, testNow, nil, f64(1410)},
+		// A refused or missing get_time falls back to the server's date.
+		{"get_time refused", `{"err_code":-1}`, ok, okm, testNow, f64(3), f64(1185)},
+		{"get_time refused, no entry for today", `{"err_code":-1}`, ok, okm, server(11, 20, 12), f64(0), f64(1185)},
+		// A refused stats call is unknown, whatever the rest says.
+		{"daystat refused", at(2026, 11, 19), `{"err_code":-1}`, okm, testNow, nil, f64(1185)},
+		{"monthstat refused", at(2026, 11, 19), ok, `{"err_code":-1,"err_msg":"module not support"}`, testNow, f64(3), nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := parseLegacy(reply(tc.devTime, tc.daystat, tc.ms), tc.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.PowerWatts == nil || *r.PowerWatts != 5 || r.Alias != "Lamp" {
+				t.Fatalf("other fields lost: %+v", r)
+			}
+			for _, c := range []struct {
+				what      string
+				got, want *float64
+			}{{"today", r.EnergyTodayWh, tc.today}, {"month", r.EnergyMonthWh, tc.month}} {
+				if (c.got == nil) != (c.want == nil) || (c.got != nil && *c.got != *c.want) {
+					t.Errorf("%s = %v, want %v", c.what, deref(c.got), deref(c.want))
+				}
+			}
+		})
+	}
+}
+
+func f64(v float64) *float64 { return &v }
+
+func deref(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
