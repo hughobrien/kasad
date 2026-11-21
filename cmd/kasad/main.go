@@ -45,6 +45,29 @@ func list(s string) []string {
 	return out
 }
 
+// check rejects settings that would panic or do nothing useful: a stray
+// argument (probably a flag typed without its dashes) or a duration that is
+// not positive (time.NewTicker panics on one).
+func check(cfg exporter.Config, args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected argument %q (flags start with -)", args[0])
+	}
+	for _, d := range []struct {
+		flag string
+		v    time.Duration
+	}{
+		{"poll-interval", cfg.PollInterval},
+		{"discover-interval", cfg.DiscoverInterval},
+		{"expire", cfg.Expire},
+		{"poll-timeout", cfg.PollTimeout},
+	} {
+		if d.v <= 0 {
+			return fmt.Errorf("-%s must be positive, got %v", d.flag, d.v)
+		}
+	}
+	return nil
+}
+
 func run() error {
 	var targets promwrite.Targets
 	flag.Var(&targets, "push", "name=url of a remote write receiver (VictoriaMetrics, or Prometheus with its receiver on) to push every reading to; repeat for more. /metrics serves the readings either way, labelled pushed_<name>=\"true\" for the receiver's own scrape to drop")
@@ -77,6 +100,9 @@ func run() error {
 		PollTimeout:      *pollTO,
 		DiscoverWait:     3 * time.Second,
 		Job:              *job,
+	}
+	if err := check(cfg, flag.Args()); err != nil {
+		return err
 	}
 	if *credsPath != "" {
 		c, err := readCreds(*credsPath)
