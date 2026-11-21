@@ -274,10 +274,12 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 		err  error
 		used = k
 	)
-	// One retry: Wi-Fi plugs drop the odd packet.
+	// One retry: Wi-Fi plugs drop the odd packet. An unknown device already
+	// gets two attempts (one per protocol), so it is not retried: a dead one
+	// would hold the round for four timeouts.
 	for attempt := 0; attempt < 2 && ctx.Err() == nil; attempt++ {
 		r, used, kl, err = e.pollKind(ctx, d.host, k, kl)
-		if err == nil {
+		if err == nil || k == kindUnknown {
 			break
 		}
 	}
