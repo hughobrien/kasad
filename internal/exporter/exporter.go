@@ -274,12 +274,12 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 		err  error
 		used = k
 	)
-	// One retry: Wi-Fi plugs drop the odd packet.
+	// One retry: Wi-Fi plugs drop the odd packet. An unknown device already
+	// gets two attempts (one per protocol), so it is not retried: a dead one
+	// would hold the round for four timeouts.
 	for attempt := 0; attempt < 2 && ctx.Err() == nil; attempt++ {
-		cctx, cancel := context.WithTimeout(ctx, e.cfg.PollTimeout)
-		r, used, kl, err = e.pollKind(cctx, d.host, k, kl)
-		cancel()
-		if err == nil {
+		r, used, kl, err = e.pollKind(ctx, d.host, k, kl)
+		if err == nil || k == kindUnknown {
 			break
 		}
 	}
@@ -427,8 +427,15 @@ func (e *Exporter) write(ctx context.Context, host string, allow func(*device) e
 	return nil
 }
 
-// pollKind polls with the known protocol, or tries each when unknown.
+// pollKind polls with the known protocol, or tries each when unknown. Each
+// attempt gets its own PollTimeout, so a device that silently drops TCP 9999
+// still leaves KLAP a full try.
 func (e *Exporter) pollKind(ctx context.Context, host string, k kind, kl *kasa.KLAP) (*kasa.Reading, kind, *kasa.KLAP, error) {
+	tryLegacy := func() (*kasa.Reading, error) {
+		cctx, cancel := context.WithTimeout(ctx, e.cfg.PollTimeout)
+		defer cancel()
+		return e.be.pollLegacy(cctx, host, e.now())
+	}
 	tryKLAP := func() (*kasa.Reading, kind, *kasa.KLAP, error) {
 		if e.cfg.Creds == nil {
 			return nil, kindUnknown, kl, errors.New("device needs KLAP but no credentials are configured")
@@ -436,20 +443,32 @@ func (e *Exporter) pollKind(ctx context.Context, host string, k kind, kl *kasa.K
 		if kl == nil {
 			kl = kasa.NewKLAP(host, *e.cfg.Creds)
 		}
-		r, err := e.be.pollKLAP(ctx, kl)
+		cctx, cancel := context.WithTimeout(ctx, e.cfg.PollTimeout)
+		defer cancel()
+		r, err := e.be.pollKLAP(cctx, kl)
 		return r, kindKLAP, kl, err
 	}
 	switch k {
 	case kindLegacy:
-		r, err := e.be.pollLegacy(ctx, host, e.now())
+		r, err := tryLegacy()
 		return r, kindLegacy, kl, err
 	case kindKLAP:
 		return tryKLAP()
 	}
-	if r, err := e.be.pollLegacy(ctx, host, e.now()); err == nil {
+	r, lerr := tryLegacy()
+	if lerr == nil {
 		return r, kindLegacy, kl, nil
 	}
-	return tryKLAP()
+	r, used, kl, kerr := tryKLAP()
+	if kerr == nil {
+		return r, used, kl, nil
+	}
+	// Report both attempts. Without credentials KLAP was never tried, so say
+	// the device did not answer legacy rather than blame the credentials.
+	if e.cfg.Creds == nil {
+		kerr = errors.New("KLAP not tried: no credentials are configured")
+	}
+	return nil, kindUnknown, kl, fmt.Errorf("protocol unknown: legacy: %v; klap: %v", lerr, kerr)
 }
 
 func (k kind) String() string {
