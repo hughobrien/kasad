@@ -5,9 +5,11 @@ package web
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
@@ -26,23 +28,29 @@ type Devices interface {
 }
 
 type server struct {
-	d    Devices
-	meta *ui.Meta // nil: no rooms, no downstream links
-	now  func() time.Time
+	d       Devices
+	allowed map[string]bool // normalised names accepted besides IPs and localhost
+	meta    *ui.Meta        // nil: no rooms, no downstream links
+	now     func() time.Time
 }
 
 // Handler serves the page and its routes; every other path goes to rest
-// (the metrics handler).
-func Handler(d Devices, rest http.Handler, meta *ui.Meta) http.Handler {
-	s := &server{d: d, meta: meta, now: time.Now}
+// (the metrics handler). The page's routes answer only to a Host that is an
+// IP address, localhost or one of allowedHosts (see hostOK); rest answers to
+// any Host.
+func Handler(d Devices, rest http.Handler, meta *ui.Meta, allowedHosts []string) http.Handler {
+	s := &server{d: d, meta: meta, now: time.Now, allowed: map[string]bool{}}
+	for _, h := range allowedHosts {
+		s.allowed[normHost(h)] = true
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", s.index)
-	mux.HandleFunc("GET /ui/sse", s.sse)
-	mux.HandleFunc("POST /ui/devices/{host}/relay", s.relay)
-	mux.HandleFunc("POST /ui/devices/{host}/brightness", s.brightness)
-	mux.HandleFunc("GET /ui/static/style.css", serveAsset("style.css", "text/css; charset=utf-8"))
-	mux.HandleFunc("GET /ui/static/favicon.svg", serveAsset("favicon.svg", "image/svg+xml"))
-	mux.HandleFunc("GET /ui/static/datastar.js", serveAsset(DatastarFile, "text/javascript; charset=utf-8"))
+	mux.HandleFunc("GET /{$}", s.guard(s.index))
+	mux.HandleFunc("GET /ui/sse", s.guard(s.sse))
+	mux.HandleFunc("POST /ui/devices/{host}/relay", s.guard(s.relay))
+	mux.HandleFunc("POST /ui/devices/{host}/brightness", s.guard(s.brightness))
+	mux.HandleFunc("GET /ui/static/style.css", s.guard(serveAsset("style.css", "text/css; charset=utf-8")))
+	mux.HandleFunc("GET /ui/static/favicon.svg", s.guard(serveAsset("favicon.svg", "image/svg+xml")))
+	mux.HandleFunc("GET /ui/static/datastar.js", s.guard(serveAsset(DatastarFile, "text/javascript; charset=utf-8")))
 	mux.Handle("/", rest)
 	return mux
 }
@@ -64,6 +72,35 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := templates.Page(ui.NewPage(s.d.Devices(), s.now(), s.meta)).Render(r.Context(), w); err != nil {
 		slog.Debug("render index", "err", err)
+	}
+}
+
+// normHost lower-cases a host name, drops any port and brackets, and drops a
+// trailing dot.
+func normHost(h string) string {
+	if n, _, err := net.SplitHostPort(h); err == nil {
+		h = n
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return strings.TrimSuffix(strings.ToLower(h), ".")
+}
+
+// hostOK stops DNS rebinding: a hostile page can point its own name at this
+// daemon and then looks same-origin to the browser, but it cannot make the
+// browser send an IP address or one of our names as the Host.
+func (s *server) hostOK(r *http.Request) bool {
+	h := normHost(r.Host)
+	return net.ParseIP(h) != nil || h == "localhost" || s.allowed[h]
+}
+
+// guard refuses a request whose Host is not acceptable.
+func (s *server) guard(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.hostOK(r) {
+			http.Error(w, "Host not allowed: add it to --allowed-hosts (NixOS: services.kasad.allowedHosts)", http.StatusForbidden)
+			return
+		}
+		next(w, r)
 	}
 }
 

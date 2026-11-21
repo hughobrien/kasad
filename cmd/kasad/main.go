@@ -53,6 +53,7 @@ func run() error {
 		credsPath = flag.String("credentials", "", "file with the TP-Link account email (line 1) and password (line 2); optional, only newer devices need it")
 		broadcast = flag.String("broadcast", "255.255.255.255", "comma-separated discovery targets (IPv4 broadcast addresses)")
 		hosts     = flag.String("hosts", "", "comma-separated devices to poll even if discovery misses them")
+		allowed   = flag.String("allowed-hosts", "", "comma-separated Host names the page may be reached by, besides IP addresses, localhost and this machine's hostname (a reverse proxy's name); /metrics and /healthz take any Host")
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
 		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")
 		job       = flag.String("job", "kasad", "job label on pushed series")
@@ -109,7 +110,13 @@ func run() error {
 	}
 
 	templates.BuildID = buildID()
-	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta), ReadHeaderTimeout: 5 * time.Second}
+	// The machine's own hostname (short and as reported) is always allowed, so
+	// http://myserver:9881 works without configuration.
+	allowedHosts := list(*allowed)
+	if h, err := os.Hostname(); err == nil {
+		allowedHosts = append(allowedHosts, h, strings.SplitN(h, ".", 2)[0])
+	}
+	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta, allowedHosts), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

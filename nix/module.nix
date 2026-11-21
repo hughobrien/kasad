@@ -104,6 +104,12 @@ in {
       description = "Devices to poll even if discovery does not find them (other subnets).";
     };
 
+    allowedHosts = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Host names the page may be reached by, besides IP addresses, localhost and the machine's own hostname (for example a reverse proxy's name). /metrics and /healthz take any Host.";
+    };
+
     credentialsFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
@@ -267,6 +273,8 @@ in {
           "--job" (lib.escapeShellArg cfg.prometheus.jobName)
         ] ++ lib.concatLists (lib.mapAttrsToList (n: t: [ "--push" (lib.escapeShellArg "${n}=${t.url}") ]) targets) ++ lib.optionals (cfg.hosts != [ ]) [
           "--hosts" (lib.escapeShellArg (lib.concatStringsSep "," cfg.hosts))
+        ] ++ lib.optionals (cfg.allowedHosts != [ ]) [
+          "--allowed-hosts" (lib.escapeShellArg (lib.concatStringsSep "," cfg.allowedHosts))
         ] ++ lib.optionals (cfg.credentialsFile != null) [
           "--credentials" "%d/credentials"
         ] ++ lib.optionals (cfg.rooms != [ ] || cfg.downstream != { }) [
