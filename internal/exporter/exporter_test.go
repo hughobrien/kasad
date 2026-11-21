@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func pushTest() (*Exporter, *fakeStore, *time.Time) {
 func TestPushesEveryReading(t *testing.T) {
 	e, store, now := pushTest()
 	for range 3 {
-		e.pollAll(t.Context())
+		round(t.Context(), e)
 		*now = now.Add(15 * time.Second)
 	}
 	p := samplesOf(store.writes, "kasa_power_watts")
@@ -163,7 +164,7 @@ func TestNoTargetsServesReadingsUnmarked(t *testing.T) {
 		return &kasa.Reading{Alias: "Lamp", Model: "KP115(US)", PowerWatts: f(5)}, nil
 	}
 	e.devices["10.0.0.1"] = &device{host: "10.0.0.1", kind: kindLegacy}
-	e.pollAll(t.Context())
+	round(t.Context(), e)
 	out := scrape(t, e)
 	if !strings.Contains(out, `kasa_power_watts{alias="Lamp",host="10.0.0.1",model="KP115(US)"} 5`) || strings.Contains(out, "pushed_") {
 		t.Errorf("want unmarked readings:\n%s", out)
@@ -173,15 +174,15 @@ func TestNoTargetsServesReadingsUnmarked(t *testing.T) {
 func TestPushFailures(t *testing.T) {
 	e, store, now := pushTest()
 	store.err = errors.New("connection refused")
-	e.pollAll(t.Context())
+	round(t.Context(), e)
 	*now = now.Add(15 * time.Second)
-	e.pollAll(t.Context())
+	round(t.Context(), e)
 	if n := e.push[0].Queue.Len(); n != 4 { // power and relay, twice
 		t.Fatalf("a failed push should keep the readings: %d samples queued", n)
 	}
 	store.err = nil
 	*now = now.Add(15 * time.Second)
-	e.pollAll(t.Context())
+	round(t.Context(), e)
 	if p := samplesOf(store.writes, "kasa_power_watts"); len(p) != 3 || p[0].V != 10 || p[2].V != 30 {
 		t.Fatalf("want the kept readings sent in order with the new one: %v", p)
 	}
@@ -190,5 +191,68 @@ func TestPushFailures(t *testing.T) {
 	}
 	if e.push[0].Queue.MaxAge != queueAge {
 		t.Error("the backlog should be bounded")
+	}
+}
+
+// round polls once and flushes every target, as Run's flushers would.
+func round(ctx context.Context, e *Exporter) {
+	e.pollAll(ctx)
+	for i := range e.push {
+		e.flushOne(ctx, i)
+	}
+}
+
+// hangStore blocks every write until its context ends, like a receiver that
+// takes the connection and never answers.
+type hangStore struct{ entered chan struct{} }
+
+func (h *hangStore) Write(ctx context.Context, _ []promwrite.Series) error {
+	h.entered <- struct{}{}
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// chanStore reports each write on a channel.
+type chanStore struct{ got chan int }
+
+func (c *chanStore) Write(_ context.Context, s []promwrite.Series) error {
+	c.got <- len(s)
+	return nil
+}
+
+func TestHangingTargetDoesNotStallPolling(t *testing.T) {
+	hang := &hangStore{entered: make(chan struct{}, 10)}
+	ok := &chanStore{got: make(chan int, 10)}
+	push := promwrite.NewPushers(promwrite.Targets{{Name: "slow", URL: "http://slow"}, {Name: "fast", URL: "http://fast"}}, nil)
+	push[0].Queue.W, push[1].Queue.W = hang, ok
+	e := New(Config{Expire: 10 * time.Minute, PollTimeout: time.Second}, push, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e.be.pollLegacy = func(context.Context, string, time.Time) (*kasa.Reading, error) {
+		return &kasa.Reading{Alias: "Lamp", Model: "KP115(US)", On: true, HasState: true, PowerWatts: f(5)}, nil
+	}
+	e.devices["10.0.0.1"] = &device{host: "10.0.0.1", kind: kindLegacy}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	for i := range e.push {
+		wg.Add(1)
+		go func() { defer wg.Done(); e.flusher(ctx, i) }()
+	}
+
+	e.pollAll(ctx)
+	<-hang.entered // slow's write is now stuck
+	<-ok.got
+	// Further rounds return at once and fast still gets its readings.
+	for range 3 {
+		e.pollAll(ctx)
+		select {
+		case <-ok.got:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the healthy target was held up by the hanging one")
+		}
+	}
+	if e.push[0].Queue.Len() == 0 {
+		t.Error("the hanging target should keep its backlog")
 	}
 }
