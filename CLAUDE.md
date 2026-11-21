@@ -28,4 +28,4 @@ Prometheus exporter and control page for TP-Link Kasa plugs and switches, runnin
 
 ## Commands
 
-`go test -race ./...`; `just generate` after editing `.templ`; `just gate` runs the nix gate on bigthink (the Mac has no nix).
+`go test -race ./...`; `just generate` after editing `.templ`; `just gate` runs the nix gate and module checks on bigthink (the Mac has no nix).

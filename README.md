@@ -259,7 +259,7 @@ http://127.0.0.1:9881/.
 
 ## Development
 
-`go test ./...`. After editing a `.templ` file run `just generate` (templ 0.3.1118, the version the flake pins) and commit the `*_templ.go` files. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate`
-(`just gate` runs it on a remote Nix host).
+`go test ./...`. After editing a `.templ` file run `just generate` (templ 0.3.1118, the version the flake pins) and commit the `*_templ.go` files. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate .#checks.x86_64-linux.module`
+(Go checks, then an evaluation of the NixOS module; `just gate` runs both on a remote Nix host).
 
 Licensed GPL-3.0-or-later.
