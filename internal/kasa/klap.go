@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -87,10 +88,25 @@ func (k *KLAP) post(ctx context.Context, path string, query url.Values, body []b
 	return resp.StatusCode, data, err
 }
 
+// newTransport returns a transport private to one device session: no proxy
+// (the devices are on the LAN) and one connection, so closing it never
+// disturbs another device or package.
+func newTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		MaxIdleConns:          1,
+		MaxIdleConnsPerHost:   1,
+		MaxConnsPerHost:       1,
+		IdleConnTimeout:       30 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	}
+}
+
 func (k *KLAP) reset() {
 	k.sess = nil
 	if k.client != nil {
-		k.client.CloseIdleConnections()
+		k.client.CloseIdleConnections() // its own transport only
 	}
 	k.client = nil
 }
@@ -102,7 +118,7 @@ func (k *KLAP) handshake(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	k.client = &http.Client{Jar: jar}
+	k.client = &http.Client{Jar: jar, Transport: newTransport()}
 
 	local := make([]byte, 16)
 	if _, err := rand.Read(local); err != nil {
