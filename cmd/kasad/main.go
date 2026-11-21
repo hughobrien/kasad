@@ -75,7 +75,7 @@ func run() error {
 		listen    = flag.String("listen", "127.0.0.1:9881", "HTTP listen address")
 		credsPath = flag.String("credentials", "", "file with the TP-Link account email (line 1) and password (line 2); optional, only newer devices need it")
 		broadcast = flag.String("broadcast", "255.255.255.255", "comma-separated discovery targets (IPv4 broadcast addresses)")
-		hosts     = flag.String("hosts", "", "comma-separated devices to poll even if discovery misses them")
+		hosts     = flag.String("hosts", "", "comma-separated IP addresses of devices to poll even if discovery misses them (not DNS names: one that discovery also finds by address would show twice)")
 		allowed   = flag.String("allowed-hosts", "", "comma-separated Host names the page may be reached by, besides IP addresses, localhost and this machine's hostname (a reverse proxy's name); /metrics and /healthz take any Host")
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
 		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")

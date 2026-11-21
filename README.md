@@ -167,7 +167,7 @@ curl localhost:9881/metrics
 |---|---|---|
 | `--listen` | `127.0.0.1:9881` | HTTP address for the page, `/metrics` and `/healthz` |
 | `--broadcast` | `255.255.255.255` | comma-separated discovery targets. On a host with several interfaces, name the LAN's broadcast address |
-| `--hosts` | | devices to poll even if discovery misses them |
+| `--hosts` | | IP addresses of devices to poll even if discovery misses them. Give addresses, not DNS names: the table is keyed by the string given, so a device listed by name and also found by discovery would appear twice |
 | `--allowed-hosts` | | comma-separated names the page may be reached by, besides IP addresses, `localhost` and this machine's hostname (for example `kasad.wg` behind a reverse proxy); other names get a 403 |
 | `--credentials` | | TP-Link account file for newer devices |
 | `--poll-interval` | `15s` | |
@@ -249,7 +249,7 @@ http://127.0.0.1:9881/.
 |---|---|---|
 | `listen` | `"127.0.0.1:9881"` | page, `/metrics` and `/healthz` |
 | `broadcast` | `[ "255.255.255.255" ]` | discovery targets; name the LAN's broadcast address on a multi-homed host |
-| `hosts` | `[ ]` | devices to poll even if discovery misses them |
+| `hosts` | `[ ]` | IP addresses of devices to poll even if discovery misses them (not DNS names) |
 | `allowedHosts` | `[ ]` | names the page may be reached by besides IPs, `localhost` and the machine's hostname; set it to the reverse proxy's name |
 | `credentialsFile` | `null` | TP-Link account file; without it KLAP-only devices are skipped |
 | `pollInterval`, `discoverInterval`, `expire` | `"15s"`, `"15m"`, `"10m"` | Go durations |
