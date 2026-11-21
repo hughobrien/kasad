@@ -50,6 +50,10 @@ type device struct {
 	ok       bool
 	errors   uint64
 	last     *kasa.Reading // last good reading; labels survive an outage
+
+	// gen is bumped when a poll starts or a write begins; a poll whose gen
+	// has moved on when it finishes is stale and its result is dropped.
+	gen uint64
 }
 
 // backend is the device I/O, a seam so tests need no network.
@@ -261,6 +265,8 @@ func (e *Exporter) series(at time.Time, s snapshot) []promwrite.Series {
 func (e *Exporter) pollOne(ctx context.Context, d *device) {
 	e.mu.Lock()
 	k, kl := d.kind, d.klap
+	d.gen++
+	gen := d.gen
 	e.mu.Unlock()
 
 	var (
@@ -280,6 +286,9 @@ func (e *Exporter) pollOne(ctx context.Context, d *device) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if d.gen != gen {
+		return // a write or a newer poll began meanwhile; this reading is stale
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -368,6 +377,9 @@ func (e *Exporter) write(ctx context.Context, host string, allow func(*device) e
 	}
 	k, kl := d.kind, d.klap
 	err := allow(d)
+	if err == nil {
+		d.gen++ // polls already in flight predate this write
+	}
 	e.mu.Unlock()
 	if err != nil {
 		return err
