@@ -91,7 +91,8 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go e.Run(ctx)
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); e.Run(ctx) }()
 
 	var meta *ui.Meta
 	if *metaPath != "" {
@@ -117,14 +118,22 @@ func run() error {
 		allowedHosts = append(allowedHosts, h, strings.SplitN(h, ".", 2)[0])
 	}
 	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta, allowedHosts), ReadHeaderTimeout: 5 * time.Second}
+	shutDone := make(chan struct{})
 	go func() {
+		defer close(shutDone)
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
 	log.Info("listening", "addr", *listen, "klap", cfg.Creds != nil)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err := srv.ListenAndServe()
+	// Stop, then wait for the HTTP shutdown and for Run's last flush to the
+	// push targets; each is bounded (3 s and 2 s) and they run side by side.
+	stop()
+	<-shutDone
+	<-runDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

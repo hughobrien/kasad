@@ -218,6 +218,30 @@ func round(ctx context.Context, e *Exporter) {
 	}
 }
 
+// What is still queued when Run ends is sent before Run returns.
+func TestRunFlushesOnShutdown(t *testing.T) {
+	e, store, _ := pushTest()
+	e.cfg.PollInterval, e.cfg.DiscoverInterval = time.Hour, time.Hour
+	e.push[0].Queue.Add(promwrite.Series{
+		Labels:  map[string]string{"__name__": "kasa_power_watts", "host": "10.0.0.9"},
+		Samples: []promwrite.Sample{{T: time.Unix(1700000000, 0), V: 1}}})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	e.Run(ctx)
+	if n := e.push[0].Queue.Len(); n != 0 {
+		t.Fatalf("%d samples left queued", n)
+	}
+	var found bool
+	for _, w := range store.writes {
+		for _, s := range w {
+			found = found || s.Labels["host"] == "10.0.0.9"
+		}
+	}
+	if !found {
+		t.Fatal("the queued sample was never written")
+	}
+}
+
 // hangStore blocks every write until its context ends, like a receiver that
 // takes the connection and never answers.
 type hangStore struct{ entered chan struct{} }

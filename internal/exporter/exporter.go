@@ -103,6 +103,9 @@ const queueAge = 2 * time.Hour
 // never answers is given up on well within a poll interval.
 const flushTimeout = 10 * time.Second
 
+// finalFlushTimeout bounds the last write to each target at shutdown.
+const finalFlushTimeout = 2 * time.Second
+
 // New returns an Exporter; call Run to start it. Every reading is pushed to
 // each of push (none is fine: /metrics has them all).
 func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
@@ -123,16 +126,33 @@ func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
 	return e
 }
 
-// Run discovers and polls until ctx is done.
+// Run discovers and polls until ctx is done, then sends what is still queued
+// to each target once, within finalFlushTimeout. It returns when that is over.
 func (e *Exporter) Run(ctx context.Context) {
-	var wg sync.WaitGroup
-	wg.Add(2 + len(e.push))
+	var wg, fwg sync.WaitGroup
+	wg.Add(2)
+	fwg.Add(len(e.push))
 	for i := range e.push {
-		go func() { defer wg.Done(); e.flusher(ctx, i) }()
+		go func() { defer fwg.Done(); e.flusher(ctx, i) }()
 	}
 	go func() { defer wg.Done(); e.loop(ctx, e.cfg.DiscoverInterval, e.discover) }()
 	go func() { defer wg.Done(); e.loop(ctx, e.cfg.PollInterval, e.pollAll) }()
 	wg.Wait()
+	fwg.Wait()
+
+	// ctx is done, so the last flush needs a context of its own. The targets
+	// are flushed side by side so one that hangs does not use up the time.
+	var last sync.WaitGroup
+	for i := range e.push {
+		last.Add(1)
+		go func() {
+			defer last.Done()
+			fctx, cancel := context.WithTimeout(context.Background(), min(e.flushTimeout, finalFlushTimeout))
+			defer cancel()
+			e.flushOne(fctx, i)
+		}()
+	}
+	last.Wait()
 }
 
 func (e *Exporter) loop(ctx context.Context, every time.Duration, f func(context.Context)) {
