@@ -15,7 +15,7 @@ func newHandler(f *fakeDevices) http.Handler { return newHandlerMeta(f, nil) }
 func newHandlerMeta(f *fakeDevices, m *ui.Meta) http.Handler {
 	return Handler(f, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("metrics-here"))
-	}), m)
+	}), m, []string{"kasad.wg", "example.com"})
 }
 
 func post(h http.Handler, target string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -135,6 +135,50 @@ func TestStaticAssets(t *testing.T) {
 		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
 		if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), ctype) || w.Body.Len() < 100 {
 			t.Errorf("%s: status %d, type %q, %d bytes", path, w.Code, w.Header().Get("Content-Type"), w.Body.Len())
+		}
+	}
+}
+
+func TestHostCheck(t *testing.T) {
+	for host, want := range map[string]int{
+		"192.168.1.10":          200,
+		"192.168.1.10:9881":     200,
+		"[fd00::1]":             200,
+		"[fd00::1]:9881":        200,
+		"localhost:9881":        200,
+		"LocalHost":             200,
+		"KASAD.wg:80":           200,
+		"kasad.wg.":             200,
+		"attacker.example":      403,
+		"attacker.example:9881": 403,
+		"":                      403,
+	} {
+		f := newFake(dev("10.0.0.1", "Lamp", 5.5))
+		r := httptest.NewRequest("POST", "/ui/devices/10.0.0.1/relay?on=false", nil)
+		r.Host = host
+		r.Header.Set("Sec-Fetch-Site", "same-origin")
+		w := httptest.NewRecorder()
+		newHandler(f).ServeHTTP(w, r)
+		if w.Code != want {
+			t.Errorf("%q: status %d, want %d", host, w.Code, want)
+		}
+		if (want == 200) != (len(f.sets) == 1) {
+			t.Errorf("%q: writes %d", host, len(f.sets))
+		}
+		if want == 403 && !strings.Contains(w.Body.String(), "--allowed-hosts") {
+			t.Errorf("%q: body %q does not name the flag", host, w.Body.String())
+		}
+	}
+}
+
+func TestHostCheckCoversPageAndSSEButNotMetrics(t *testing.T) {
+	for path, want := range map[string]int{"/": 403, "/ui/sse": 403, "/metrics": 200} {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = "attacker.example"
+		w := httptest.NewRecorder()
+		newHandler(newFake()).ServeHTTP(w, r)
+		if w.Code != want {
+			t.Errorf("%s: status %d, want %d", path, w.Code, want)
 		}
 	}
 }
