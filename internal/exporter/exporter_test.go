@@ -325,3 +325,49 @@ func TestStalePollDoesNotOverwriteWrite(t *testing.T) {
 		t.Errorf("ok=%v errors=%d", d.ok, d.errors)
 	}
 }
+
+// unknownTest is a device of unknown protocol with a short PollTimeout.
+func unknownTest() (*Exporter, *device) {
+	e := New(Config{Expire: 10 * time.Minute, PollTimeout: 50 * time.Millisecond, Creds: &kasa.Credentials{Username: "user@example.invalid", Password: "x"}}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := &device{host: "192.0.2.1"}
+	e.devices = map[string]*device{d.host: d}
+	return e, d
+}
+
+func TestUnknownLegacyHangsKLAPStillTried(t *testing.T) {
+	e, d := unknownTest()
+	e.be.pollLegacy = func(ctx context.Context, _ string, _ time.Time) (*kasa.Reading, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	e.be.pollKLAP = func(ctx context.Context, _ *kasa.KLAP) (*kasa.Reading, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return &kasa.Reading{}, nil
+	}
+	e.pollOne(t.Context(), d)
+	if !d.ok || d.kind != kindKLAP {
+		t.Fatalf("ok = %v kind = %v, want ok klap", d.ok, d.kind)
+	}
+}
+
+func TestUnknownProtocolErrors(t *testing.T) {
+	e, _ := unknownTest()
+	e.be.pollLegacy = func(context.Context, string, time.Time) (*kasa.Reading, error) {
+		return nil, errors.New("connection refused")
+	}
+	e.be.pollKLAP = func(context.Context, *kasa.KLAP) (*kasa.Reading, error) {
+		return nil, kasa.ErrAuth
+	}
+	_, _, _, err := e.pollKind(t.Context(), "192.0.2.1", kindUnknown, nil)
+	if err == nil || !strings.Contains(err.Error(), "legacy: connection refused") || !strings.Contains(err.Error(), "klap: "+kasa.ErrAuth.Error()) {
+		t.Fatalf("err = %v", err)
+	}
+
+	e.cfg.Creds = nil
+	_, _, _, err = e.pollKind(t.Context(), "192.0.2.1", kindUnknown, nil)
+	if err == nil || !strings.Contains(err.Error(), "legacy: connection refused") || !strings.Contains(err.Error(), "no credentials") || strings.Contains(err.Error(), "needs KLAP") {
+		t.Fatalf("err = %v", err)
+	}
+}
