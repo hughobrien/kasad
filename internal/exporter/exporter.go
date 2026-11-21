@@ -83,6 +83,9 @@ type Exporter struct {
 
 	// push gets every reading, one queue per target.
 	push promwrite.Pushers
+	// wake[i] asks push[i]'s flusher for a flush (size 1: wake-ups coalesce).
+	wake         []chan struct{}
+	flushTimeout time.Duration
 
 	mu      sync.Mutex
 	devices map[string]*device
@@ -91,6 +94,10 @@ type Exporter struct {
 // queueAge bounds each target's backlog while it is away: about 1,000
 // samples a poll is 240,000 an hour.
 const queueAge = 2 * time.Hour
+
+// flushTimeout bounds one write, so a target that accepts connections and
+// never answers is given up on well within a poll interval.
+const flushTimeout = 10 * time.Second
 
 // New returns an Exporter; call Run to start it. Every reading is pushed to
 // each of push (none is fine: /metrics has them all).
@@ -102,7 +109,10 @@ func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
 		p.Queue.MaxAge = queueAge
 	}
 	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(), push: push,
-		subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
+		flushTimeout: flushTimeout, subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
+	for range push {
+		e.wake = append(e.wake, make(chan struct{}, 1))
+	}
 	for _, h := range cfg.Hosts {
 		e.devices[h] = &device{host: h, static: true}
 	}
@@ -112,7 +122,10 @@ func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
 // Run discovers and polls until ctx is done.
 func (e *Exporter) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(2 + len(e.push))
+	for i := range e.push {
+		go func() { defer wg.Done(); e.flusher(ctx, i) }()
+	}
 	go func() { defer wg.Done(); e.loop(ctx, e.cfg.DiscoverInterval, e.discover) }()
 	go func() { defer wg.Done(); e.loop(ctx, e.cfg.PollInterval, e.pollAll) }()
 	wg.Wait()
@@ -192,14 +205,35 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
-	e.flush(ctx)
+	for _, w := range e.wake {
+		select {
+		case w <- struct{}{}:
+		default:
+		}
+	}
 }
 
-// flush sends what each target has queued; one that fails keeps its queue
-// for the next round.
-func (e *Exporter) flush(ctx context.Context) {
-	if err := e.push.Flush(ctx); err != nil {
-		e.log.Warn("push failed", "err", err)
+// flusher sends target i's queue whenever a round has finished. It runs on
+// its own so polling never waits on a push, and a target that hangs delays
+// only itself. Rounds that end during a flush share the next one.
+func (e *Exporter) flusher(ctx context.Context, i int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.wake[i]:
+			e.flushOne(ctx, i)
+		}
+	}
+}
+
+// flushOne sends what target i has queued; on failure it keeps its queue
+// for the next flush.
+func (e *Exporter) flushOne(ctx context.Context, i int) {
+	ctx, cancel := context.WithTimeout(ctx, e.flushTimeout)
+	defer cancel()
+	if err := e.push[i].Queue.Flush(ctx); err != nil {
+		e.log.Warn("push failed", "target", e.push[i].Name, "err", err)
 	}
 }
 
