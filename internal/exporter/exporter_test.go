@@ -256,3 +256,56 @@ func TestHangingTargetDoesNotStallPolling(t *testing.T) {
 		t.Error("the hanging target should keep its backlog")
 	}
 }
+
+// A round's poll that started before a switch and finishes after the switch's
+// own poll must not overwrite the newer reading.
+func TestStalePollDoesNotOverwriteWrite(t *testing.T) {
+	e := newTest()
+	e.cfg.PollTimeout = time.Second
+	d := &device{host: "10.0.0.1", kind: kindLegacy}
+	e.devices[d.host] = d
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	e.be.pollLegacy = func(_ context.Context, _ string, _ time.Time) (*kasa.Reading, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n == 1 { // the round's poll: reads "off", its reply held back
+			close(started)
+			<-release
+			return &kasa.Reading{Alias: "Lamp", HasState: true, On: false}, nil
+		}
+		return &kasa.Reading{Alias: "Lamp", HasState: true, On: true}, nil
+	}
+	e.be.setLegacy = func(context.Context, string, bool) error { return nil }
+
+	done := make(chan struct{})
+	go func() { e.pollOne(t.Context(), d); close(done) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("round poll never started")
+	}
+	if err := e.SetRelay(t.Context(), d.host, true); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("round poll never finished")
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if d.last == nil || !d.last.On {
+		t.Fatalf("stale poll overwrote the reading taken after the switch: %+v", d.last)
+	}
+	if !d.ok || d.errors != 0 {
+		t.Errorf("ok=%v errors=%d", d.ok, d.errors)
+	}
+}
