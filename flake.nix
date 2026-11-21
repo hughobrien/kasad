@@ -101,6 +101,7 @@
             downstream = { "Speakers" = "Desk"; };
             prometheus.enable = true;
             push.offsite.url = "http://offsite:8428";
+            allowedHosts = [ "kasad.example" ];
           };
         }
         extra
@@ -126,6 +127,8 @@
       assert drops (job prom.services.prometheus.scrapeConfigs);
       assert builtins.elem 9881 vm.networking.firewall.allowedTCPPorts;
       assert lib.hasInfix "--metadata" vm.systemd.services.kasad.serviceConfig.ExecStart;
+      assert lib.hasInfix "--allowed-hosts" vm.systemd.services.kasad.serviceConfig.ExecStart;
+      assert lib.hasInfix "kasad.example" vm.systemd.services.kasad.serviceConfig.ExecStart;
       vm.systemd.units."kasad.service".unit;
 
     defaultModule = { pkgs, lib, ... }: {
