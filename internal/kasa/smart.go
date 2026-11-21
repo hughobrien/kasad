@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // smartCall sends one SMART-protocol method over KLAP and returns "result".
@@ -65,7 +66,7 @@ func (k *KLAP) Poll(ctx context.Context) (*Reading, error) {
 		return nil, fmt.Errorf("get_device_info: no model")
 	}
 	out := &Reading{Model: di.Model, RSSI: di.RSSI, OnTimeSeconds: di.OnTime}
-	if nick, err := base64.StdEncoding.DecodeString(di.Nickname); err == nil {
+	if nick, err := base64.StdEncoding.DecodeString(di.Nickname); err == nil && utf8.Valid(nick) {
 		out.Alias = string(nick)
 	} else {
 		out.Alias = di.Nickname

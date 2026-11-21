@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestXORRoundTrip(t *testing.T) {
@@ -232,6 +233,25 @@ func TestKLAPPoll(t *testing.T) {
 		if r.Alias != "Fridge" || !r.On || *r.PowerWatts != 3.225 || *r.VoltageVolts != 122.513 || *r.EnergyWh != 1234 {
 			t.Fatalf("poll %d: %+v", i, r)
 		}
+	}
+}
+
+func TestKLAPBadNicknameBytes(t *testing.T) {
+	creds := Credentials{Username: "a", Password: "b"}
+	srv, _ := fakeKLAP(t, creds, map[string]any{
+		"get_device_info": map[string]any{
+			"model": "EP25", "nickname": base64.StdEncoding.EncodeToString([]byte{0xff, 0xfe, 'L'}),
+		},
+	})
+	k := NewKLAP(strings.TrimPrefix(srv.URL, "http://"), creds)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	r, err := k.Poll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(r.Alias) || r.Alias == "" {
+		t.Fatalf("alias %q", r.Alias)
 	}
 }
 

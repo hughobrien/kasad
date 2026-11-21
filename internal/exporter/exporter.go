@@ -246,7 +246,7 @@ func (e *Exporter) flushOne(ctx context.Context, i int) {
 func (e *Exporter) series(at time.Time, s snapshot) []promwrite.Series {
 	alias, model := "", ""
 	if s.last != nil {
-		alias, model = s.last.Alias, s.last.Model
+		alias, model = labelText(s.last.Alias), labelText(s.last.Model)
 	}
 	var out []promwrite.Series
 	for _, m := range metrics {

@@ -31,6 +31,22 @@ func scrape(t *testing.T, e *Exporter) string {
 	return rec.Body.String()
 }
 
+func TestMetricsBadAlias(t *testing.T) {
+	e := newTest()
+	e.devices["10.0.0.1"] = &device{host: "10.0.0.1", ok: true, last: &kasa.Reading{Alias: "\xff\xfeL", Model: "KP125(US)", HasState: true}}
+	e.devices["10.0.0.2"] = &device{host: "10.0.0.2", ok: true, last: &kasa.Reading{Alias: "Switch", Model: "KS200(US)", HasState: true}}
+
+	out := scrape(t, e)
+	for _, want := range []string{
+		`kasa_up{alias="Switch",host="10.0.0.2",model="KS200(US)"} 1`,
+		"kasa_up{alias=\"\uFFFDL\",host=\"10.0.0.1\"",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestMetricsUpAndDown(t *testing.T) {
 	e := newTest()
 	now := time.Unix(1700000000, 0)
