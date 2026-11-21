@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/hughobrien/kasad/internal/exporter"
 )
@@ -18,7 +19,8 @@ type Meta struct {
 	Rooms      []Room            `json:"rooms"`
 	Downstream map[string]string `json:"downstream"` // device name -> name of the device it is plugged into
 
-	lower map[string]string
+	once  sync.Once
+	lower map[string]string // Downstream lower-cased, built on first use
 }
 
 // Room is a titled group; the order in the file is the order on the page.
@@ -53,13 +55,14 @@ func LoadMeta(path string) (*Meta, error) {
 	return &m, nil
 }
 
+// downstream is built once, under the Once, as pages render concurrently.
 func (m *Meta) downstream() map[string]string {
-	if m.lower == nil {
+	m.once.Do(func() {
 		m.lower = make(map[string]string, len(m.Downstream))
 		for d, u := range m.Downstream {
 			m.lower[strings.ToLower(d)] = strings.ToLower(u)
 		}
-	}
+	})
 	return m.lower
 }
 

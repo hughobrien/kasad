@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/hughobrien/kasad/internal/exporter"
@@ -124,4 +125,18 @@ func TestUnmatched(t *testing.T) {
 	if got != "Typo,Nope" {
 		t.Fatalf("unmatched = %q", got)
 	}
+}
+
+func TestConcurrentPages(t *testing.T) {
+	m := &Meta{Downstream: map[string]string{"Sound": "Desk", "Lamp": "Desk"}}
+	ds := devs("Desk", "Sound", "Lamp")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			NewPage(ds, now, m)
+		}()
+	}
+	wg.Wait()
 }
