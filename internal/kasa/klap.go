@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -261,12 +262,23 @@ func (s *klapSession) decrypt(msg []byte) ([]byte, error) {
 	if len(msg) < 32+aes.BlockSize || (len(msg)-32)%aes.BlockSize != 0 {
 		return nil, fmt.Errorf("klap: reply length %d invalid", len(msg))
 	}
+	// The reply is signed like the request, with the request's sequence
+	// number. Check it before decrypting anything.
+	want := sha256sum(s.sig, seqBytes(s.seq), msg[32:])
+	if subtle.ConstantTimeCompare(want, msg[:32]) != 1 {
+		return nil, errors.New("klap: reply signature mismatch")
+	}
 	block, _ := aes.NewCipher(s.key)
 	pt := make([]byte, len(msg)-32)
 	cipher.NewCBCDecrypter(block, s.lastIV).CryptBlocks(pt, msg[32:])
 	pad := int(pt[len(pt)-1])
 	if pad < 1 || pad > aes.BlockSize || pad > len(pt) {
 		return nil, errors.New("klap: bad padding in reply")
+	}
+	for _, b := range pt[len(pt)-pad:] {
+		if int(b) != pad {
+			return nil, errors.New("klap: bad padding in reply")
+		}
 	}
 	return pt[:len(pt)-pad], nil
 }

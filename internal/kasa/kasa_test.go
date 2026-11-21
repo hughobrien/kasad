@@ -563,3 +563,51 @@ func deref(p *float64) any {
 	}
 	return *p
 }
+
+// signedReply builds a reply the way a device does: the request's sequence
+// number, CBC under the request's IV, signature over the ciphertext.
+func signedReply(s *klapSession, plain []byte) []byte {
+	blk, _ := aes.NewCipher(s.key)
+	ct := make([]byte, len(plain))
+	cipher.NewCBCEncrypter(blk, s.lastIV).CryptBlocks(ct, plain)
+	return append(sha256sum(s.sig, seqBytes(s.seq), ct), ct...)
+}
+
+func TestKLAPDecryptVerifies(t *testing.T) {
+	newSess := func() *klapSession {
+		s := newKlapSession(bytes.Repeat([]byte{1}, 16), bytes.Repeat([]byte{2}, 16), bytes.Repeat([]byte{3}, 32))
+		s.encrypt([]byte("request"))
+		return s
+	}
+	good := append([]byte(`{"error_code":0}`), bytes.Repeat([]byte{16}, 16)...)
+
+	s := newSess()
+	out, err := s.decrypt(signedReply(s, good))
+	if err != nil || string(out) != `{"error_code":0}` {
+		t.Fatalf("good reply: %q, %v", out, err)
+	}
+
+	s = newSess()
+	r := signedReply(s, good)
+	r[0] ^= 1
+	if _, err := s.decrypt(r); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Errorf("flipped signature byte: err = %v", err)
+	}
+
+	s = newSess()
+	r = signedReply(s, good)
+	r[40] ^= 1
+	if _, err := s.decrypt(r); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Errorf("flipped ciphertext byte: err = %v", err)
+	}
+
+	// Validly signed, but the padding is wrong in an earlier pad byte.
+	s = newSess()
+	bad := append([]byte(`{"error_code":0}`), 1)
+	bad = append(bad, bytes.Repeat([]byte{15}, 14)...)
+	bad = append(bad, 15)
+	bad[len(bad)-3] = 9
+	if _, err := s.decrypt(signedReply(s, bad)); err == nil || !strings.Contains(err.Error(), "padding") {
+		t.Errorf("bad padding: err = %v", err)
+	}
+}
