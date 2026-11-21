@@ -170,11 +170,14 @@ curl localhost:9881/metrics
 | `--hosts` | | IP addresses of devices to poll even if discovery misses them. Give addresses, not DNS names: the table is keyed by the string given, so a device listed by name and also found by discovery would appear twice |
 | `--allowed-hosts` | | comma-separated names the page may be reached by, besides IP addresses, `localhost` and this machine's hostname (for example `kasad.wg` behind a reverse proxy); other names get a 403 |
 | `--credentials` | | TP-Link account file for newer devices |
-| `--poll-interval` | `15s` | |
+| `--poll-interval` | `15s` | how often to poll each device |
+| `--poll-timeout` | `5s` | timeout for one poll attempt |
 | `--discover-interval` | `15m` | how soon a new device, or one with a new address, appears |
 | `--expire` | `10m` | forget a discovered device after this long unheard (checked at each discovery sweep; devices in `--hosts` are never forgotten) |
 | `--push` | | `name=url` of a remote write receiver to push every reading to; repeatable |
 | `--job` | `kasad` | `job` label on pushed series |
+| `--metadata` | | JSON file naming rooms and devices plugged into other devices; optional |
+| `--version` | | print the version and exit |
 
 Discovery packets get lost on Wi-Fi, so each probe is sent twice and devices
 are only dropped after `--expire` without a reply to discovery or to a poll.

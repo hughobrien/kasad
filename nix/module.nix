@@ -85,7 +85,7 @@ in {
     listen = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1:9881";
-      description = "HTTP listen address for /metrics.";
+      description = "HTTP listen address for the page, /metrics and /healthz.";
     };
 
     broadcast = lib.mkOption {
