@@ -45,6 +45,29 @@ func list(s string) []string {
 	return out
 }
 
+// check rejects settings that would panic or do nothing useful: a stray
+// argument (probably a flag typed without its dashes) or a duration that is
+// not positive (time.NewTicker panics on one).
+func check(cfg exporter.Config, args []string) error {
+	if len(args) > 0 {
+		return fmt.Errorf("unexpected argument %q (flags start with -)", args[0])
+	}
+	for _, d := range []struct {
+		flag string
+		v    time.Duration
+	}{
+		{"poll-interval", cfg.PollInterval},
+		{"discover-interval", cfg.DiscoverInterval},
+		{"expire", cfg.Expire},
+		{"poll-timeout", cfg.PollTimeout},
+	} {
+		if d.v <= 0 {
+			return fmt.Errorf("-%s must be positive, got %v", d.flag, d.v)
+		}
+	}
+	return nil
+}
+
 func run() error {
 	var targets promwrite.Targets
 	flag.Var(&targets, "push", "name=url of a remote write receiver (VictoriaMetrics, or Prometheus with its receiver on) to push every reading to; repeat for more. /metrics serves the readings either way, labelled pushed_<name>=\"true\" for the receiver's own scrape to drop")
@@ -52,7 +75,7 @@ func run() error {
 		listen    = flag.String("listen", "127.0.0.1:9881", "HTTP listen address")
 		credsPath = flag.String("credentials", "", "file with the TP-Link account email (line 1) and password (line 2); optional, only newer devices need it")
 		broadcast = flag.String("broadcast", "255.255.255.255", "comma-separated discovery targets (IPv4 broadcast addresses)")
-		hosts     = flag.String("hosts", "", "comma-separated devices to poll even if discovery misses them")
+		hosts     = flag.String("hosts", "", "comma-separated IP addresses of devices to poll even if discovery misses them (not DNS names: one that discovery also finds by address would show twice)")
 		allowed   = flag.String("allowed-hosts", "", "comma-separated Host names the page may be reached by, besides IP addresses, localhost and this machine's hostname (a reverse proxy's name); /metrics and /healthz take any Host")
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
 		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")
@@ -78,6 +101,9 @@ func run() error {
 		DiscoverWait:     3 * time.Second,
 		Job:              *job,
 	}
+	if err := check(cfg, flag.Args()); err != nil {
+		return err
+	}
 	if *credsPath != "" {
 		c, err := readCreds(*credsPath)
 		if err != nil {
@@ -91,7 +117,8 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go e.Run(ctx)
+	runDone := make(chan struct{})
+	go func() { defer close(runDone); e.Run(ctx) }()
 
 	var meta *ui.Meta
 	if *metaPath != "" {
@@ -117,14 +144,22 @@ func run() error {
 		allowedHosts = append(allowedHosts, h, strings.SplitN(h, ".", 2)[0])
 	}
 	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta, allowedHosts), ReadHeaderTimeout: 5 * time.Second}
+	shutDone := make(chan struct{})
 	go func() {
+		defer close(shutDone)
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(sctx)
 	}()
 	log.Info("listening", "addr", *listen, "klap", cfg.Creds != nil)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err := srv.ListenAndServe()
+	// Stop, then wait for the HTTP shutdown and for Run's last flush to the
+	// push targets; each is bounded (3 s and 2 s) and they run side by side.
+	stop()
+	<-shutDone
+	<-runDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

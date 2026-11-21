@@ -292,8 +292,3 @@ func pick(a, b *float64) *float64 {
 	}
 	return b
 }
-
-// timeoutCtx is a small helper for per-call deadlines.
-func timeoutCtx(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, d)
-}

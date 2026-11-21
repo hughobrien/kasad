@@ -85,7 +85,7 @@ in {
     listen = lib.mkOption {
       type = lib.types.str;
       default = "127.0.0.1:9881";
-      description = "HTTP listen address for /metrics.";
+      description = "HTTP listen address for the page, /metrics and /healthz.";
     };
 
     broadcast = lib.mkOption {
@@ -101,7 +101,7 @@ in {
     hosts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Devices to poll even if discovery does not find them (other subnets). They are never forgotten, so a dead one keeps `kasa_up 0`; they need fixed addresses.";
+      description = "IP addresses of devices to poll even if discovery does not find them (other subnets). Use addresses, not DNS names, or a device discovery also finds would show twice. They are never forgotten, so a dead one keeps `kasa_up 0`.";
     };
 
     allowedHosts = lib.mkOption {
