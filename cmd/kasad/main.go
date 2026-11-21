@@ -57,7 +57,7 @@ func run() error {
 		poll      = flag.Duration("poll-interval", 15*time.Second, "how often to poll each device")
 		discover  = flag.Duration("discover-interval", 15*time.Minute, "how often to broadcast for new devices (a device's successful polls keep it from expiring)")
 		job       = flag.String("job", "kasad", "job label on pushed series")
-		expire    = flag.Duration("expire", 10*time.Minute, "drop a discovered device after this long unseen")
+		expire    = flag.Duration("expire", 10*time.Minute, "drop a discovered device after this long unseen, checked at each discovery sweep (devices in --hosts are never dropped)")
 		pollTO    = flag.Duration("poll-timeout", 5*time.Second, "timeout for one poll attempt")
 		metaPath  = flag.String("metadata", "", "JSON file naming rooms and devices plugged into other devices (see README); optional")
 		showVer   = flag.Bool("version", false, "print version and exit")

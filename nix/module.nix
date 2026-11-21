@@ -101,7 +101,7 @@ in {
     hosts = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Devices to poll even if discovery does not find them (other subnets).";
+      description = "Devices to poll even if discovery does not find them (other subnets). They are never forgotten, so a dead one keeps `kasa_up 0`; they need fixed addresses.";
     };
 
     allowedHosts = lib.mkOption {
@@ -140,7 +140,12 @@ in {
     expire = lib.mkOption {
       type = lib.types.str;
       default = "10m";
-      description = "Forget a discovered device after this long without hearing from it.";
+      description = ''
+        Forget a discovered device after this long without hearing from it,
+        checked at each discovery sweep (so a dead device shows `kasa_up 0`
+        for `expire` to `expire` plus `discoverInterval`, then its series stop).
+        Devices in `hosts` are never forgotten.
+      '';
     };
 
     push = lib.mkOption {

@@ -66,7 +66,11 @@ worth.
 Wi-Fi plugs are unreliable, so polling never waits on a scrape. When a device
 stops answering, nothing more is pushed for it (a gap in the graph, not a flat
 line of stale values), `kasa_up` goes to 0 and
-`kasa_last_success_timestamp_seconds` says when it last worked.
+`kasa_last_success_timestamp_seconds` says when it last worked. That lasts
+until `--expire` (10m) has passed and the next discovery sweep (every 15m) runs,
+so 10 to 25 minutes with the defaults. Then the device is forgotten: its series
+stop, its card goes, and an alert on `kasa_up == 0` resolves by itself. Devices
+in `--hosts` are never forgotten and keep `kasa_up 0`.
 
 ## Web UI
 
@@ -134,7 +138,9 @@ when asked (it is an input, so nothing in the file is tied to one Grafana).
 
 - **Needs attention:** a green "All clear", or one line per problem device: not
   answering, no good poll for two minutes, Wi-Fi weaker than -75 dBm, mains
-  outside 114-126 V, or more than ten failed polls in the last hour.
+  outside 114-126 V, or more than ten failed polls in the last hour. A dead
+  device leaves the strip when it is forgotten (see above); for one that must
+  not go quiet, list it in `--hosts` or alert on `absent` for its series.
 - **Summary row:** combined draw, energy in the selected time range, relays on,
   devices answering, mains voltage.
 - **Per device:** power stacked by plug with a mean/max/last table, energy per
@@ -166,7 +172,7 @@ curl localhost:9881/metrics
 | `--credentials` | | TP-Link account file for newer devices |
 | `--poll-interval` | `15s` | |
 | `--discover-interval` | `15m` | how soon a new device, or one with a new address, appears |
-| `--expire` | `10m` | forget a discovered device after this long unheard |
+| `--expire` | `10m` | forget a discovered device after this long unheard (checked at each discovery sweep; devices in `--hosts` are never forgotten) |
 | `--push` | | `name=url` of a remote write receiver to push every reading to; repeatable |
 | `--job` | `kasad` | `job` label on pushed series |
 
