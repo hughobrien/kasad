@@ -1,5 +1,7 @@
 package kasa
 
+import "strings"
+
 // Reading is one poll of one device. Optional measurements are nil when the
 // device does not report them (a switch has no power meter).
 type Reading struct {
@@ -24,10 +26,15 @@ type Reading struct {
 	EnergyMonthWh *float64
 }
 
-// settle applies what is true by definition: with the relay open nothing is
+// validUTF8 replaces bytes that are not UTF-8; a device name ends up as a label
+// value, and Prometheus refuses those.
+func validUTF8(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
+
+// settle cleans the device's strings and applies what is true by definition: with the relay open nothing is
 // drawn. A plug's meter lags the relay for a moment after switching off, and a
 // stale figure there would be presented as current.
 func (r *Reading) settle() *Reading {
+	r.Alias, r.Model = validUTF8(r.Alias), validUTF8(r.Model)
 	if r.HasState && !r.On {
 		zero := func(v **float64) {
 			if *v != nil {

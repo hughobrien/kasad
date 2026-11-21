@@ -3,6 +3,7 @@ package exporter
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
@@ -118,17 +119,23 @@ func (c collector) Describe(ch chan<- *prometheus.Desc) {
 	}
 }
 
+// labelText makes a device string safe as a label value.
+func labelText(s string) string { return strings.ToValidUTF8(s, "\uFFFD") }
+
 func (c collector) Collect(ch chan<- prometheus.Metric) {
 	snaps := c.e.snapshot()
 	ch <- prometheus.MustNewConstMetric(devicesDesc, prometheus.GaugeValue, float64(len(snaps)))
 	for _, s := range snaps {
 		alias, model := "", ""
 		if s.last != nil {
-			alias, model = s.last.Alias, s.last.Model
+			alias, model = labelText(s.last.Alias), labelText(s.last.Model)
 		}
 		for i, m := range metrics {
 			if v, ok := m.value(s); ok {
-				ch <- prometheus.MustNewConstMetric(c.descs[i], m.typ, v, alias, s.host, model)
+				// A bad sample is skipped, not allowed to fail the scrape.
+				if cm, err := prometheus.NewConstMetric(c.descs[i], m.typ, v, alias, s.host, model); err == nil {
+					ch <- cm
+				}
 			}
 		}
 	}
