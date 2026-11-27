@@ -27,7 +27,7 @@ A Grafana dashboard built on the metrics (device names blacked out):
 Devices that speak both are polled over the legacy protocol, which needs no
 account. Without `--credentials`, KLAP-only devices are skipped.
 
-```
+```text
 kasa_up{alias,host,model}                     1 if the last poll worked
 kasa_last_success_timestamp_seconds
 kasa_poll_errors_total
@@ -158,7 +158,7 @@ queries still exists.
 
 ## Running
 
-```
+```sh
 kasad --broadcast 192.168.1.255 --credentials ./creds   # creds: email, then password
 curl localhost:9881/metrics
 ```
@@ -246,7 +246,7 @@ sudoedit /etc/kasad/credentials
 ```
 
 After `nixos-rebuild switch`, the page and `/metrics` are on
-http://127.0.0.1:9881/.
+<http://127.0.0.1:9881/>.
 
 | Option | Default | |
 |---|---|---|
@@ -268,7 +268,6 @@ http://127.0.0.1:9881/.
 
 ## Development
 
-`go test ./...`. After editing a `.templ` file run `just generate` (templ 0.3.1118, the version the flake pins) and commit the `*_templ.go` files. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate .#checks.x86_64-linux.module`
-(Go checks, then an evaluation of the NixOS module; `just gate` runs both on a remote Nix host).
+Run `cycle test-fast` / `cycle test-slow` (or `nix develop -c go test ./...`). After editing a `.templ` file run `nix develop -c templ generate` (templ 0.3.1118, the version the flake pins) and commit the `*_templ.go` files. The hermetic CI gate is `nix build .#checks.x86_64-linux.gate` (lint, Go checks, templ drift check, and NixOS module evaluation).
 
 Licensed GPL-3.0-or-later.

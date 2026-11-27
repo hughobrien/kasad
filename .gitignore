@@ -1,3 +1,6 @@
 /kasad
-/result
+result
+result-*
+.worktrees/
+.direnv/
 coverage.out
