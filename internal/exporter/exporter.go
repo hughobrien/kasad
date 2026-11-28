@@ -58,6 +58,7 @@ type device struct {
 
 // backend is the device I/O, a seam so tests need no network.
 type backend struct {
+	discover      func(ctx context.Context, targets []string, wait time.Duration) (kasa.Found, error)
 	pollLegacy    func(ctx context.Context, host string, now time.Time) (*kasa.Reading, error)
 	pollKLAP      func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error)
 	setLegacy     func(ctx context.Context, host string, on bool) error
@@ -67,6 +68,7 @@ type backend struct {
 
 func realBackend() backend {
 	return backend{
+		discover:      kasa.Discover,
 		pollLegacy:    kasa.PollLegacy,
 		pollKLAP:      func(ctx context.Context, k *kasa.KLAP) (*kasa.Reading, error) { return k.Poll(ctx) },
 		setLegacy:     kasa.SetLegacyRelay,
@@ -90,6 +92,8 @@ type Exporter struct {
 	// wake[i] asks push[i]'s flusher for a flush (size 1: wake-ups coalesce).
 	wake         []chan struct{}
 	flushTimeout time.Duration
+	earlyFlush   time.Duration
+	startupGaps  []time.Duration
 
 	mu      sync.Mutex
 	devices map[string]*device
@@ -106,6 +110,12 @@ const flushTimeout = 10 * time.Second
 // finalFlushTimeout bounds the last write to each target at shutdown.
 const finalFlushTimeout = 2 * time.Second
 
+// earlyFlushDelay wakes push flushers if a slow or offline device is still
+// timing out after healthy devices have finished polling.
+const earlyFlushDelay = time.Second
+
+var startupDiscoveryGaps = []time.Duration{10 * time.Second, 20 * time.Second, 30 * time.Second}
+
 // New returns an Exporter; call Run to start it. Every reading is pushed to
 // each of push (none is fine: /metrics has them all).
 func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
@@ -116,7 +126,8 @@ func New(cfg Config, push promwrite.Pushers, log *slog.Logger) *Exporter {
 		p.Queue.MaxAge = queueAge
 	}
 	e := &Exporter{cfg: cfg, log: log, now: time.Now, be: realBackend(), push: push,
-		flushTimeout: flushTimeout, subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
+		flushTimeout: flushTimeout, earlyFlush: earlyFlushDelay, startupGaps: startupDiscoveryGaps,
+		subs: map[chan struct{}]struct{}{}, devices: map[string]*device{}}
 	for range push {
 		e.wake = append(e.wake, make(chan struct{}, 1))
 	}
@@ -135,7 +146,7 @@ func (e *Exporter) Run(ctx context.Context) {
 	for i := range e.push {
 		go func() { defer fwg.Done(); e.flusher(ctx, i) }()
 	}
-	go func() { defer wg.Done(); e.loop(ctx, e.cfg.DiscoverInterval, e.discover) }()
+	go func() { defer wg.Done(); e.discoverLoop(ctx) }()
 	go func() { defer wg.Done(); e.loop(ctx, e.cfg.PollInterval, e.pollAll) }()
 	wg.Wait()
 	fwg.Wait()
@@ -169,20 +180,53 @@ func (e *Exporter) loop(ctx context.Context, every time.Duration, f func(context
 	}
 }
 
+// discoverLoop runs a short burst of sweeps on startup (Wi-Fi broadcasts
+// are lossy and the steady-state interval is long), then settles into
+// DiscoverInterval.
+func (e *Exporter) discoverLoop(ctx context.Context) {
+	e.discover(ctx)
+	for _, gap := range e.startupGaps {
+		if gap >= e.cfg.DiscoverInterval {
+			break
+		}
+		t := time.NewTimer(gap)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
+		}
+		e.discover(ctx)
+	}
+	t := time.NewTicker(e.cfg.DiscoverInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			e.discover(ctx)
+		}
+	}
+}
+
 func (e *Exporter) discover(ctx context.Context) {
-	found, err := kasa.Discover(ctx, e.cfg.Broadcast, e.cfg.DiscoverWait)
+	found, err := e.be.discover(ctx, e.cfg.Broadcast, e.cfg.DiscoverWait)
 	if err != nil {
 		e.log.Warn("discovery failed", "err", err)
 		return
 	}
-	e.applyDiscovery(found)
+	if added := e.applyDiscovery(found); len(added) > 0 && ctx.Err() == nil {
+		e.pollDevices(ctx, added)
+	}
 }
 
-func (e *Exporter) applyDiscovery(found kasa.Found) {
+func (e *Exporter) applyDiscovery(found kasa.Found) []*device {
 	now := e.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	changed := false
+	var added []*device
 	add := func(host string, k kind) {
 		d, ok := e.devices[host]
 		if !ok {
@@ -190,6 +234,7 @@ func (e *Exporter) applyDiscovery(found kasa.Found) {
 			e.devices[host] = d
 			e.log.Info("discovered device", "host", host)
 			changed = true
+			added = append(added, d)
 		}
 		d.lastSeen = now
 		// Only a legacy reply proves the protocol. A reply on the newer
@@ -220,6 +265,7 @@ func (e *Exporter) applyDiscovery(found kasa.Found) {
 	if changed {
 		e.notify()
 	}
+	return added
 }
 
 func (e *Exporter) wakeFlushers() {
@@ -238,7 +284,19 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		devs = append(devs, d)
 	}
 	e.mu.Unlock()
+	e.pollDevices(ctx, devs)
+}
 
+func (e *Exporter) pollDevices(ctx context.Context, devs []*device) {
+	if len(devs) == 0 {
+		return
+	}
+	// Wake flushers early if a dead device is holding up the round,
+	// while keeping a single batched flush when all devices answer fast.
+	var early *time.Timer
+	if e.earlyFlush > 0 {
+		early = time.AfterFunc(e.earlyFlush, e.wakeFlushers)
+	}
 	var wg sync.WaitGroup
 	for _, d := range devs {
 		wg.Add(1)
@@ -248,6 +306,9 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
+	if early != nil {
+		early.Stop()
+	}
 	e.wakeFlushers()
 }
 

@@ -644,3 +644,95 @@ func TestLegacyQueryCancelsPromptly(t *testing.T) {
 		t.Fatalf("legacyQuery took %v to cancel", d)
 	}
 }
+
+func TestParseSmartDiscovery(t *testing.T) {
+	pkt := func(body string) []byte {
+		hdr := make([]byte, 16)
+		return append(hdr, []byte(body)...)
+	}
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		want bool
+	}{
+		{
+			"ep25 klap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.KASAPLUG","device_model":"EP25(US)","mgt_encrypt_schm":{"encrypt_type":"KLAP","lv":2}}}`),
+			true,
+		},
+		{
+			"legacy switch on 20002",
+			pkt(`{"error_code":0,"result":{"device_type":"IOT.SMARTPLUGSWITCH","device_model":"KS200(US)"}}`),
+			true,
+		},
+		{
+			"tapo plug klap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.TAPOPLUG","device_model":"P110","mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`),
+			true,
+		},
+		{
+			"power strip klap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.KASAPOWERSTRIP","device_model":"KP303","mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`),
+			true,
+		},
+		{
+			"trailing nul bytes",
+			append(pkt(`{"error_code":0,"result":{"device_type":"SMART.KASAPLUG","device_model":"EP25","mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`), 0, 0, 0),
+			true,
+		},
+		{
+			"xor encrypt type",
+			pkt(`{"error_code":0,"result":{"device_type":"IOT.SMARTPLUGSWITCH","device_model":"HS103","mgt_encrypt_schm":{"encrypt_type":"XOR"}}}`),
+			true,
+		},
+		{
+			"ip camera aes",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.IPCAMERA","device_model":"C200","mgt_encrypt_schm":{"encrypt_type":"AES"}}}`),
+			false,
+		},
+		{
+			"plug tpap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.TAPOPLUG","device_model":"P110","mgt_encrypt_schm":{"encrypt_type":"TPAP"}}}`),
+			false,
+		},
+		{
+			"tapo hub klap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.TAPOHUB","device_model":"H100","mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`),
+			false,
+		},
+		{
+			"tapo bulb klap",
+			pkt(`{"error_code":0,"result":{"device_type":"SMART.TAPOBULB","device_model":"L530","mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`),
+			false,
+		},
+		{
+			"non-zero error_code",
+			pkt(`{"error_code":-1,"result":{"device_type":"SMART.KASAPLUG","device_model":"EP25"}}`),
+			false,
+		},
+		{
+			"missing result",
+			pkt(`{"error_code":0}`),
+			false,
+		},
+		{
+			"empty model and type",
+			pkt(`{"error_code":0,"result":{"mgt_encrypt_schm":{"encrypt_type":"KLAP"}}}`),
+			false,
+		},
+		{
+			"truncated packet",
+			make([]byte, 16),
+			false,
+		},
+		{
+			"garbage json",
+			pkt(`not json`),
+			false,
+		},
+	} {
+		if got := parseSmartDiscovery(tc.raw); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
