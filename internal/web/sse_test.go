@@ -3,6 +3,7 @@ package web
 import (
 	"bufio"
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -235,5 +236,45 @@ func TestSSERoomChangeResendsList(t *testing.T) {
 	f.change(dev("10.0.0.1", "Lamp", 5), dev("10.0.0.2", "Renamed", 9))
 	if !waitFor("Other") {
 		t.Fatal("regrouping did not resend the list")
+	}
+}
+
+func TestSSEShutdownWithBaseContext(t *testing.T) {
+	baseCtx, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{
+		Handler:     newHandler(newFake(dev("10.0.0.1", "Lamp", 5.5))),
+		BaseContext: func(net.Listener) context.Context { return baseCtx },
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	resp, err := http.Get("http://" + ln.Addr().String() + "/ui/sse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	for sc.Scan() {
+		if strings.Contains(sc.Text(), "location.reload") {
+			break
+		}
+	}
+
+	cancelBase()
+	sctx, cancelShut := context.WithTimeout(context.Background(), time.Second)
+	defer cancelShut()
+	start := time.Now()
+	if err := srv.Shutdown(sctx); err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+	if d := time.Since(start); d >= time.Second {
+		t.Fatalf("Shutdown took %v", d)
 	}
 }

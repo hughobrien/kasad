@@ -60,15 +60,8 @@ func Discover(ctx context.Context, targets []string, wait time.Duration) (Found,
 	}
 	_ = pc.SetReadDeadline(dl)
 	// Cancellation ends the blocked read at once.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = pc.SetReadDeadline(time.Now())
-		case <-done:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = pc.SetReadDeadline(time.Now()) })
+	defer stop()
 	buf := make([]byte, 4096)
 	for ctx.Err() == nil {
 		n, from, err := pc.ReadFrom(buf)

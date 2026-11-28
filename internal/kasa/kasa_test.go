@@ -611,3 +611,36 @@ func TestKLAPDecryptVerifies(t *testing.T) {
 		t.Errorf("bad padding: err = %v", err)
 	}
 }
+
+func TestLegacyQueryCancelsPromptly(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	old := legacyPortForTest
+	legacyPortForTest = port
+	defer func() { legacyPortForTest = old }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = legacyQuery(ctx, host, []byte(`{}`))
+	if err == nil {
+		t.Fatal("expected error on cancelled context")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("legacyQuery took %v to cancel", d)
+	}
+}

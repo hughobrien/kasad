@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -31,5 +33,26 @@ func TestCheck(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want an error naming %q", name, err, tc.want)
 		}
+	}
+}
+
+func TestReadCreds(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "creds")
+	if err := os.WriteFile(p, []byte("user@example.com\r\nsecret\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := readCreds(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Username != "user@example.com" || c.Password != "secret" {
+		t.Fatalf("got %+v", c)
+	}
+
+	if err := os.WriteFile(p, []byte("user@example.com\n\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readCreds(p); err == nil {
+		t.Fatal("empty CRLF password line must be rejected")
 	}
 }

@@ -19,6 +19,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -71,22 +72,22 @@ func (c Credentials) authHashes() (v2, v1 []byte) {
 	return v2, v1
 }
 
-func (k *KLAP) post(ctx context.Context, path string, query url.Values, body []byte) (int, []byte, error) {
+func (k *KLAP) post(ctx context.Context, path string, query url.Values, body []byte) (int, http.Header, []byte, error) {
 	u := url.URL{Scheme: "http", Host: k.host, Path: path}
 	if query != nil {
 		u.RawQuery = query.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(body))
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	resp, err := k.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	return resp.StatusCode, data, err
+	return resp.StatusCode, resp.Header, data, err
 }
 
 // newTransport returns a transport private to one device session: no proxy
@@ -125,7 +126,7 @@ func (k *KLAP) handshake(ctx context.Context) error {
 	if _, err := rand.Read(local); err != nil {
 		return err
 	}
-	status, body, err := k.post(ctx, "/app/handshake1", nil, local)
+	status, hdr, body, err := k.post(ctx, "/app/handshake1", nil, local)
 	if err != nil {
 		return err
 	}
@@ -140,15 +141,15 @@ func (k *KLAP) handshake(ctx context.Context) error {
 	v2, v1 := k.creds.authHashes()
 	var auth, proof []byte
 	switch {
-	case bytes.Equal(sha256sum(local, remote, v2), server):
+	case subtle.ConstantTimeCompare(sha256sum(local, remote, v2), server) == 1:
 		auth, proof = v2, sha256sum(remote, local, v2)
-	case bytes.Equal(sha256sum(local, v1), server):
+	case subtle.ConstantTimeCompare(sha256sum(local, v1), server) == 1:
 		auth, proof = v1, sha256sum(remote, v1)
 	default:
 		return ErrAuth
 	}
 
-	status, _, err = k.post(ctx, "/app/handshake2", nil, proof)
+	status, _, _, err = k.post(ctx, "/app/handshake2", nil, proof)
 	if err != nil {
 		return err
 	}
@@ -157,18 +158,20 @@ func (k *KLAP) handshake(ctx context.Context) error {
 	}
 
 	k.sess = newKlapSession(local, remote, auth)
-	k.expires = time.Now().Add(k.sessionLifetime())
+	k.expires = time.Now().Add(sessionLifetime(hdr))
 	return nil
 }
 
-// sessionLifetime honours the TIMEOUT cookie the device sets, minus a margin.
-func (k *KLAP) sessionLifetime() time.Duration {
+// sessionLifetime honours the TIMEOUT cookie attribute the device sets, minus a margin.
+func sessionLifetime(hdr http.Header) time.Duration {
 	life := 24 * time.Hour
-	u := &url.URL{Scheme: "http", Host: k.host, Path: "/app"}
-	for _, c := range k.client.Jar.Cookies(u) {
-		if c.Name == "TIMEOUT" {
-			if s, err := strconv.Atoi(c.Value); err == nil && s > 0 {
-				life = time.Duration(s) * time.Second
+	for _, sc := range hdr.Values("Set-Cookie") {
+		for _, part := range strings.Split(sc, ";") {
+			name, val, ok := strings.Cut(part, "=")
+			if ok && strings.EqualFold(strings.TrimSpace(name), "TIMEOUT") {
+				if s, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && s > 0 {
+					life = time.Duration(s) * time.Second
+				}
 			}
 		}
 	}
@@ -206,7 +209,7 @@ var errSessionRejected = errors.New("klap: session rejected")
 
 func (k *KLAP) requestOnce(ctx context.Context, payload []byte) ([]byte, error) {
 	enc, seq := k.sess.encrypt(payload)
-	status, body, err := k.post(ctx, "/app/request", url.Values{"seq": {strconv.Itoa(int(seq))}}, enc)
+	status, _, body, err := k.post(ctx, "/app/request", url.Values{"seq": {strconv.Itoa(int(seq))}}, enc)
 	if err != nil {
 		return nil, err
 	}

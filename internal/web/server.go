@@ -113,7 +113,7 @@ func sameOrigin(r *http.Request) bool {
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
-		return err == nil && u.Host == r.Host
+		return err == nil && strings.EqualFold(u.Host, r.Host)
 	}
 	return true
 }

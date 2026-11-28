@@ -175,15 +175,21 @@ func (e *Exporter) discover(ctx context.Context) {
 		e.log.Warn("discovery failed", "err", err)
 		return
 	}
+	e.applyDiscovery(found)
+}
+
+func (e *Exporter) applyDiscovery(found kasa.Found) {
 	now := e.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	changed := false
 	add := func(host string, k kind) {
 		d, ok := e.devices[host]
 		if !ok {
 			d = &device{host: host}
 			e.devices[host] = d
 			e.log.Info("discovered device", "host", host)
+			changed = true
 		}
 		d.lastSeen = now
 		// Only a legacy reply proves the protocol. A reply on the newer
@@ -208,6 +214,19 @@ func (e *Exporter) discover(ctx context.Context) {
 		if now.Sub(d.lastSeen) > e.cfg.Expire {
 			e.log.Info("dropping device unseen", "host", h, "for", e.cfg.Expire)
 			delete(e.devices, h)
+			changed = true
+		}
+	}
+	if changed {
+		e.notify()
+	}
+}
+
+func (e *Exporter) wakeFlushers() {
+	for _, w := range e.wake {
+		select {
+		case w <- struct{}{}:
+		default:
 		}
 	}
 }
@@ -229,12 +248,7 @@ func (e *Exporter) pollAll(ctx context.Context) {
 		}()
 	}
 	wg.Wait()
-	for _, w := range e.wake {
-		select {
-		case w <- struct{}{}:
-		default:
-		}
-	}
+	e.wakeFlushers()
 }
 
 // flusher sends target i's queue whenever a round has finished. It runs on
@@ -443,7 +457,8 @@ func (e *Exporter) write(ctx context.Context, host string, allow func(*device) e
 		e.mu.Unlock()
 		return err
 	}
-	e.pollOne(ctx, d)
+	e.pollOne(context.WithoutCancel(ctx), d)
+	e.wakeFlushers()
 	return nil
 }
 

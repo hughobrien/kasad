@@ -79,6 +79,14 @@
               services.prometheus.enable = true;
               services.prometheus.extraFlags = [ "--web.enable-remote-write-receiver" ];
             }).config;
+          prom6 =
+            (moduleSystem {
+              services.prometheus = {
+                enable = true;
+                listenAddress = "::1";
+                extraFlags = [ "--web.enable-remote-write-receiver" ];
+              };
+            }).config;
           inherit (nixpkgs) lib;
           job = jobs: lib.findFirst (j: j.job_name == "kasad") null jobs;
           drops =
@@ -94,6 +102,8 @@
         assert vm.services.prometheus.scrapeConfigs == [ ];
         assert lib.hasInfix "my_host=http://127.0.0.1:9090"
           prom.systemd.services.kasad.serviceConfig.ExecStart;
+        assert lib.hasInfix "my_host=http://[::1]:9090"
+          prom6.systemd.services.kasad.serviceConfig.ExecStart;
         assert drops (job prom.services.prometheus.scrapeConfigs);
         assert builtins.elem 9881 vm.networking.firewall.allowedTCPPorts;
         assert lib.hasInfix "--metadata" vm.systemd.services.kasad.serviceConfig.ExecStart;
