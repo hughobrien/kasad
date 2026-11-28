@@ -5,11 +5,18 @@ owner = "hughobrien"
 
 [test]
 fast_stages = [
-  ["nix develop -c sh -c 'drift=$(gofmt -l .); [ -z \"$drift\" ] || { echo \"gofmt drift: $drift\"; exit 1; }; go vet ./... && go test ./...'"],
+  "drift=$(gofmt -l .); [ -z \"$drift\" ] || { echo \"gofmt drift: $drift\"; exit 1; }",
+  "go vet ./...",
+  "go test ./...",
+  "find . -name '*.nix' -exec nixfmt --check {} +",
+  "statix check .",
+  "deadnix --fail .",
+  "actionlint .forgejo/workflows/*.yml",
+  "rumdl check --disable MD013 --no-cache .",
 ]
-
 slow_stages = [
-  ["nix develop -c sh -c 'go test -race ./... && tmp=$(mktemp -d) && trap \"rm -rf $tmp\" EXIT && cp -a internal/web/templates \"$tmp/before\" && templ generate && diff -rq \"$tmp/before\" internal/web/templates && find . -name \"*.nix\" -exec nixfmt --check {} + && statix check . && deadnix --fail . && actionlint .forgejo/workflows/*.yml && rumdl check --disable MD013 --no-cache .'"],
+  ["go test -race ./..."],
+  ["tmp=$(mktemp -d) && trap \"rm -rf $tmp\" EXIT && cp -a internal/web/templates \"$tmp/before\" && templ generate && diff -rq \"$tmp/before\" internal/web/templates"],
 ]
 
 [ci]
