@@ -13,11 +13,7 @@
       nixpkgs,
     }:
     let
-      systems = [
-        "x86_64-linux"
-        "aarch64-linux"
-        "aarch64-darwin"
-      ];
+      systems = ci.lib.systems;
       forEachSystem = f: nixpkgs.lib.genAttrs systems f;
 
       # nixpkgs lags templ; keep this in step with the templ version in go.mod
@@ -152,10 +148,10 @@
 
           goGate = kasad-pkg.overrideAttrs (old: {
             pname = "kasad-go-gate";
-            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
-              pkgs.clang
-              pkgs.templ
-            ];
+            nativeBuildInputs =
+              (old.nativeBuildInputs or [ ])
+              ++ [ pkgs.templ ]
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.clang ];
             doCheck = true;
             checkPhase = ''
               runHook preCheck
@@ -164,7 +160,9 @@
               drift=$(gofmt -l . | grep -v '^vendor/' || true)
               [ -z "$drift" ] || { echo "gofmt drift: $drift"; exit 1; }
               go test ./...
-              CGO_ENABLED=1 CC=clang go test -race ./...
+              ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
+                CGO_ENABLED=1 CC=clang go test -race ./...
+              ''}
               cp -a internal/web/templates "$TMPDIR/templ-before"
               templ generate
               diff -rq "$TMPDIR/templ-before" internal/web/templates || { echo "templ drift; run 'nix develop -c templ generate'"; exit 1; }
@@ -186,19 +184,16 @@
             inherit (kasad-pkg) meta;
           };
 
-          devShells.default = pkgs.mkShell {
-            packages =
+          devShells.default = ciLib.mkDevShell {
+            extraPackages =
               (with pkgs; [
                 go_1_27
                 gopls
                 gotools
                 templ
-                clang
               ])
-              ++ ciLib.devShellPackages;
-            env = ciLib.devShellEnv // {
-              GOTOOLCHAIN = "local";
-            };
+              ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.clang ];
+            env.GOTOOLCHAIN = "local";
           };
 
           checks = {

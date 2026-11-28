@@ -1,25 +1,11 @@
-[repo]
-name = "kasad"
-forge = "https://forgejo.wg"
-owner = "hughobrien"
-
 [test]
 fast_stages = [
+  "ci-lint",
   "drift=$(gofmt -l .); [ -z \"$drift\" ] || { echo \"gofmt drift: $drift\"; exit 1; }",
   "go vet ./...",
   "go test ./...",
-  "find . -name '*.nix' -exec nixfmt --check {} +",
-  "statix check .",
-  "deadnix --fail .",
-  "actionlint .forgejo/workflows/*.yml",
-  "rumdl check --disable MD013 --no-cache .",
 ]
 slow_stages = [
   ["go test -race ./..."],
   ["tmp=$(mktemp -d) && trap \"rm -rf $tmp\" EXIT && cp -a internal/web/templates \"$tmp/before\" && templ generate && diff -rq \"$tmp/before\" internal/web/templates"],
 ]
-
-[ci]
-required_contexts = ["ci / gate (pull_request)"]
-main_workflows = ["ci.yml"]
-tofu_plan = "none"
