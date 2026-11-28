@@ -446,3 +446,86 @@ func TestWriteWakesFlushers(t *testing.T) {
 		t.Fatal("SetRelay did not queue post-write reading")
 	}
 }
+
+func TestDiscoverLoopStartupBurst(t *testing.T) {
+	e := newTest()
+	e.cfg.DiscoverInterval = time.Hour
+	e.startupGaps = []time.Duration{5 * time.Millisecond, 5 * time.Millisecond}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var sweeps int
+	polled := make(chan string, 4)
+	e.be.discover = func(context.Context, []string, time.Duration) (kasa.Found, error) {
+		sweeps++
+		if sweeps == 2 {
+			return kasa.Found{Legacy: map[string]bool{"10.0.0.1": true}}, nil
+		}
+		if sweeps == 3 {
+			cancel()
+		}
+		return kasa.Found{}, nil
+	}
+	e.be.pollLegacy = func(_ context.Context, host string, _ time.Time) (*kasa.Reading, error) {
+		polled <- host
+		return &kasa.Reading{Alias: "Lamp", Model: "KP125(US)", On: true, HasState: true}, nil
+	}
+
+	e.discoverLoop(ctx)
+	if sweeps != 3 {
+		t.Fatalf("sweeps = %d, want 3", sweeps)
+	}
+	select {
+	case h := <-polled:
+		if h != "10.0.0.1" {
+			t.Fatalf("polled %q, want 10.0.0.1", h)
+		}
+	default:
+		t.Fatal("newly discovered device was not polled immediately")
+	}
+}
+
+func TestSlowDeviceDoesNotDelayHealthyFlush(t *testing.T) {
+	okStore := &chanStore{got: make(chan int, 10)}
+	push := promwrite.NewPushers(promwrite.Targets{{Name: "vm", URL: "http://vm"}}, nil)
+	push[0].Queue.W = okStore
+	e := New(Config{Expire: 10 * time.Minute, PollTimeout: time.Second}, push, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	e.earlyFlush = 20 * time.Millisecond
+
+	release := make(chan struct{})
+	e.be.pollLegacy = func(_ context.Context, host string, _ time.Time) (*kasa.Reading, error) {
+		if host == "10.0.0.2" {
+			<-release
+		}
+		return &kasa.Reading{Alias: host, Model: "KP115(US)", On: true, HasState: true, PowerWatts: f(10)}, nil
+	}
+	e.devices["10.0.0.1"] = &device{host: "10.0.0.1", kind: kindLegacy}
+	e.devices["10.0.0.2"] = &device{host: "10.0.0.2", kind: kindLegacy}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	var fwg sync.WaitGroup
+	fwg.Add(1)
+	go func() { defer fwg.Done(); e.flusher(ctx, 0) }()
+	defer func() { cancel(); fwg.Wait() }()
+
+	done := make(chan struct{})
+	go func() {
+		e.pollAll(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-okStore.got:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("healthy device's reading was delayed by slow device")
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("pollAll did not finish after release")
+	}
+}

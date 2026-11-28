@@ -180,10 +180,11 @@ curl localhost:9881/metrics
 | `--metadata` | | JSON file naming rooms and devices plugged into other devices; optional |
 | `--version` | | print the version and exit |
 
-Discovery packets get lost on Wi-Fi, so each probe is sent twice and devices
-are only dropped after `--expire` without a reply to discovery or to a poll.
-A device that answers its polls never expires, so discovery only has to find
-new ones.
+Discovery packets get lost on Wi-Fi, so each probe is sent twice, startup runs
+a few quick discovery sweeps before settling into `--discover-interval`, and
+devices are only dropped after `--expire` without a reply to discovery or to a
+poll. A device that answers its polls never expires, so discovery only has to
+find new ones.
 
 ## NixOS
 

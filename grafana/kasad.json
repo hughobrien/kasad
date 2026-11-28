@@ -776,7 +776,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Average across metered plugs, leaving out the 3 highest and 3 lowest at each moment so one plug's local sag doesn't drag it, then smoothed with a 30-minute moving average.",
+      "description": "Average across metered plugs (leaving out the 3 highest and 3 lowest when 10 or more plugs report, so one plug's local sag doesn't drag it), smoothed with a 30-minute moving average.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -839,7 +839,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "avg_over_time(avg(kasa_voltage_volts unless on (host) (bottomk(3, kasa_voltage_volts) or topk(3, kasa_voltage_volts)))[30m:1m])",
+          "expr": "avg_over_time((avg(kasa_voltage_volts unless on (host) (bottomk(3, kasa_voltage_volts) or topk(3, kasa_voltage_volts))) and count(kasa_voltage_volts) >= 10 or avg(kasa_voltage_volts))[30m:1m])",
           "instant": false,
           "legendFormat": "avg",
           "range": true,

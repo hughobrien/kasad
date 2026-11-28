@@ -1,8 +1,11 @@
 package kasa
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -79,7 +82,9 @@ func Discover(ctx context.Context, targets []string, wait time.Duration) (Found,
 				f.Legacy[host] = true
 			}
 		case 20002:
-			f.Smart[host] = true
+			if parseSmartDiscovery(buf[:n]) {
+				f.Smart[host] = true
+			}
 		}
 	}
 	return f, nil
@@ -88,4 +93,43 @@ func Discover(ctx context.Context, targets []string, wait time.Duration) (Found,
 func parseLegacyDiscovery(b []byte) bool {
 	r, err := parseLegacy(xorDecrypt(b), time.Now())
 	return err == nil && r.Model != ""
+}
+
+func parseSmartDiscovery(b []byte) bool {
+	if len(b) <= 16 {
+		return false
+	}
+	var r struct {
+		ErrorCode int `json:"error_code"`
+		Result    *struct {
+			DeviceType     string `json:"device_type"`
+			DeviceModel    string `json:"device_model"`
+			MgtEncryptSchm *struct {
+				EncryptType string `json:"encrypt_type"`
+			} `json:"mgt_encrypt_schm"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimRight(b[16:], "\x00"), &r); err != nil {
+		return false
+	}
+	if r.ErrorCode != 0 || r.Result == nil {
+		return false
+	}
+	if r.Result.DeviceModel == "" && r.Result.DeviceType == "" {
+		return false
+	}
+	if r.Result.MgtEncryptSchm != nil && r.Result.MgtEncryptSchm.EncryptType != "" {
+		et := r.Result.MgtEncryptSchm.EncryptType
+		if !strings.EqualFold(et, "KLAP") && !strings.EqualFold(et, "XOR") {
+			return false
+		}
+	}
+	if r.Result.DeviceType != "" {
+		dt := strings.ToUpper(r.Result.DeviceType)
+		if !strings.Contains(dt, "PLUG") && !strings.Contains(dt, "SWITCH") &&
+			!strings.Contains(dt, "DIMMER") && !strings.Contains(dt, "STRIP") {
+			return false
+		}
+	}
+	return true
 }
