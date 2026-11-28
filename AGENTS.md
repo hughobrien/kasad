@@ -30,4 +30,4 @@ Prometheus exporter and control page for TP-Link Kasa plugs and switches, runnin
 
 Run `cycle test-fast` and `cycle test-slow` inside a worktree (`cycle start` / `cycle adhoc`); `nix develop -c templ generate` after editing `.templ`; `nix build .#checks.x86_64-linux.gate` is the CI gate (lint, Go checks, templ drift check, and NixOS module evaluation).
 
-Deploys to `bigthink` follow the `bigthink-deploy` skill (`nixos-bigthink/.claude/skills/bigthink-deploy/SKILL.md`), updating only the `kasad` flake input.
+Deploys to `bigthink` follow the `bigthink-deploy` skill (`nixos-bigthink/.claude/skills/bigthink-deploy/SKILL.md`), updating only the `kasad` flake input. Shared Forge rules (`cycle`, Nix, CI) live in the global `forge` skill (`ci/.claude/skills/forge/SKILL.md`).
