@@ -395,3 +395,54 @@ func TestUnknownProtocolErrors(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestApplyDiscoveryNotifiesOnAddAndExpire(t *testing.T) {
+	e := newTest()
+	now := time.Unix(1700000000, 0)
+	e.now = func() time.Time { return now }
+
+	ch, unsub := e.Subscribe()
+	defer unsub()
+
+	e.applyDiscovery(kasa.Found{Legacy: map[string]bool{"10.0.0.1": true}})
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected notification when a device is discovered")
+	}
+
+	now = now.Add(time.Minute)
+	e.applyDiscovery(kasa.Found{Legacy: map[string]bool{"10.0.0.1": true}})
+	select {
+	case <-ch:
+		t.Fatal("unexpected notification when discovery sees the same device")
+	default:
+	}
+
+	now = now.Add(e.cfg.Expire + time.Second)
+	e.applyDiscovery(kasa.Found{})
+	select {
+	case <-ch:
+	default:
+		t.Fatal("expected notification when a device expires")
+	}
+	if len(e.Devices()) != 0 {
+		t.Fatalf("expired device still present: %+v", e.Devices())
+	}
+}
+
+func TestWriteWakesFlushers(t *testing.T) {
+	e, _, _ := pushTest()
+	e.be.setLegacy = func(context.Context, string, bool) error { return nil }
+	if err := e.SetRelay(t.Context(), "10.0.0.1", true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-e.wake[0]:
+	default:
+		t.Fatal("SetRelay did not wake push flusher")
+	}
+	if n := e.push[0].Queue.Len(); n == 0 {
+		t.Fatal("SetRelay did not queue post-write reading")
+	}
+}

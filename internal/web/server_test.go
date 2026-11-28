@@ -99,8 +99,9 @@ func TestRelayRejectsCrossSite(t *testing.T) {
 
 func TestRelayAllowsNoFetchHeadersAndMatchingOrigin(t *testing.T) {
 	for name, hdr := range map[string]map[string]string{
-		"curl":            nil,
-		"matching origin": {"Origin": "https://kasad.wg"},
+		"curl":                       nil,
+		"matching origin":            {"Origin": "https://kasad.wg"},
+		"matching origin mixed case": {"Origin": "https://KASAD.WG"},
 	} {
 		f := newFake(dev("10.0.0.1", "Lamp", 5.5))
 		if w := post(newHandler(f), "/ui/devices/10.0.0.1/relay?on=false", hdr); w.Code != 200 {

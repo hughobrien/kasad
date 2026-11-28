@@ -37,12 +37,18 @@ let
     if store == "victoriametrics" then
       "http://${lib.optionalString (lib.hasPrefix ":" vm.listenAddress) "127.0.0.1"}${vm.listenAddress}"
     else
-      "http://${
-        if prom.listenAddress == "0.0.0.0" || prom.listenAddress == "" then
-          "127.0.0.1"
-        else
-          prom.listenAddress
-      }:${toString prom.port}";
+      let
+        host =
+          if prom.listenAddress == "0.0.0.0" || prom.listenAddress == "" then
+            "127.0.0.1"
+          else if prom.listenAddress == "::" || prom.listenAddress == "[::]" then
+            "[::1]"
+          else if lib.hasInfix ":" prom.listenAddress && !(lib.hasPrefix "[" prom.listenAddress) then
+            "[${prom.listenAddress}]"
+          else
+            prom.listenAddress;
+      in
+      "http://${host}:${toString prom.port}";
   pushLocal = cfg.prometheus.enable && store != null;
   targets =
     cfg.push // lib.optionalAttrs pushLocal { ${cfg.prometheus.pushName}.url = cfg.prometheus.url; };
@@ -311,11 +317,11 @@ in
             "--broadcast"
             (lib.escapeShellArg (lib.concatStringsSep "," cfg.broadcast))
             "--poll-interval"
-            cfg.pollInterval
+            (lib.escapeShellArg cfg.pollInterval)
             "--discover-interval"
-            cfg.discoverInterval
+            (lib.escapeShellArg cfg.discoverInterval)
             "--expire"
-            cfg.expire
+            (lib.escapeShellArg cfg.expire)
             "--job"
             (lib.escapeShellArg cfg.prometheus.jobName)
           ]

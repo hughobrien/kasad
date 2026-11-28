@@ -54,6 +54,8 @@ func legacyQuery(ctx context.Context, host string, req []byte) ([]byte, error) {
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(dl)
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
 	buf := make([]byte, 4, 4+len(req))
 	binary.BigEndian.PutUint32(buf, uint32(len(req)))
 	buf = append(buf, xorEncrypt(req)...)

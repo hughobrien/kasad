@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -113,6 +114,7 @@ func run() error {
 	}
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	slog.SetDefault(log)
 	e := exporter.New(cfg, promwrite.NewPushers(targets, nil), log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -129,11 +131,12 @@ func run() error {
 		meta = m
 		// Devices take a few discovery rounds to appear; after that, a name in
 		// the file that matches nothing is a rename or a typo worth saying so.
-		time.AfterFunc(2*time.Minute, func() {
+		metaTimer := time.AfterFunc(2*time.Minute, func() {
 			if names := m.Unmatched(e.Devices()); len(names) > 0 {
 				log.Warn("metadata names match no device", "names", names)
 			}
 		})
+		defer metaTimer.Stop()
 	}
 
 	templates.BuildID = buildID()
@@ -143,7 +146,13 @@ func run() error {
 	if h, err := os.Hostname(); err == nil {
 		allowedHosts = append(allowedHosts, h, strings.SplitN(h, ".", 2)[0])
 	}
-	srv := &http.Server{Addr: *listen, Handler: web.Handler(e, e.Handler(version), meta, allowedHosts), ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{
+		Addr:              *listen,
+		Handler:           web.Handler(e, e.Handler(version), meta, allowedHosts),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+	}
 	shutDone := make(chan struct{})
 	go func() {
 		defer close(shutDone)
@@ -171,10 +180,15 @@ func readCreds(path string) (*kasa.Credentials, error) {
 		return nil, err
 	}
 	lines := strings.Split(strings.TrimRight(string(b), "\r\n"), "\n")
-	if len(lines) < 2 || strings.TrimSpace(lines[0]) == "" || lines[1] == "" {
+	if len(lines) < 2 {
 		return nil, fmt.Errorf("%s: want the email on line 1 and the password on line 2", path)
 	}
-	return &kasa.Credentials{Username: strings.TrimSpace(lines[0]), Password: strings.TrimRight(lines[1], "\r")}, nil
+	user := strings.TrimSpace(lines[0])
+	pass := strings.TrimRight(lines[1], "\r")
+	if user == "" || pass == "" {
+		return nil, fmt.Errorf("%s: want the email on line 1 and the password on line 2", path)
+	}
+	return &kasa.Credentials{Username: user, Password: pass}, nil
 }
 
 // buildID hashes the running binary, which changes on every deploy, so an open

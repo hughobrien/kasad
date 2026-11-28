@@ -138,7 +138,8 @@ when asked (it is an input, so nothing in the file is tied to one Grafana).
 
 - **Needs attention:** a green "All clear", or one line per problem device: not
   answering, no good poll for two minutes, Wi-Fi weaker than -75 dBm, mains
-  outside 114-126 V, or more than ten failed polls in the last hour. A dead
+  outside 114-126 V, or more than ten failed polls in the last hour, plus
+  failing remote-write pushes or `kasad` not reporting. A dead
   device leaves the strip when it is forgotten (see above); for one that must
   not go quiet, list it in `--hosts` or alert on `absent` for its series.
 - **Summary row:** combined draw, energy in the selected time range, relays on,
